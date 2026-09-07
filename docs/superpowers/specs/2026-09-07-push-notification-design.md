@@ -1,4 +1,4 @@
-# @idevconn/push-notification — Design Spec
+# @idevconn/push-notifications — Design Spec
 
 Date: 2026-09-07
 Status: Approved
