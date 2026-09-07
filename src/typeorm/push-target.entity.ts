@@ -2,7 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn } from 'typeor
 import type { PushTarget } from '../index';
 
 @Entity()
-export class PushSubscriptionEntity {
+export class PushTargetEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 

@@ -1,4 +1,4 @@
-export const SUBSCRIPTION_STORE = Symbol('SUBSCRIPTION_STORE');
+export const PUSH_TARGET_STORE = Symbol('PUSH_TARGET_STORE');
 export const NOTIFICATION_LOG_STORE = Symbol('NOTIFICATION_LOG_STORE');
 export const NOTIFICATION_AUTHORIZER = Symbol('NOTIFICATION_AUTHORIZER');
 export const NOTIFICATION_WEBHOOK_VERIFIER = Symbol('NOTIFICATION_WEBHOOK_VERIFIER');
@@ -32,7 +32,7 @@ export interface SendResult {
   error?: SendError;
 }
 
-export interface SubscriptionStore {
+export interface PushTargetStore {
   save(userId: string, target: PushTarget): Promise<void>;
   findByUserId(userId: string): Promise<PushTarget[]>;
   delete(userId: string, target: PushTarget): Promise<void>;

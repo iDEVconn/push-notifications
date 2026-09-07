@@ -1,4 +1,4 @@
-import type { PushPayload, PushTarget, SendResult, SubscriptionStore } from '../index';
+import type { PushPayload, PushTarget, SendResult, PushTargetStore } from '../index';
 import { sendWebPush, type WebPushConfig } from './providers/webpush.provider';
 import { sendFcm, type FcmConfig } from './providers/fcm.provider';
 import { sendApns, type ApnsConfig } from './providers/apns.provider';
@@ -19,7 +19,7 @@ export class ProviderNotConfiguredError extends Error {
 export class PushService {
   constructor(
     private readonly config: PushServiceConfig,
-    private readonly store: SubscriptionStore,
+    private readonly store: PushTargetStore,
   ) {}
 
   async send(target: PushTarget, payload: PushPayload): Promise<SendResult> {

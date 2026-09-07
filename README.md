@@ -26,7 +26,7 @@ import { PushNotificationModule } from '@idevconn/push-notifications/server';
       webpush: { vapidPublicKey, vapidPrivateKey, subject: 'mailto:you@example.com' },
       fcm: { serviceAccount },
       apns: { key, keyId, teamId, bundleId },
-      subscriptionStore: myStore, // implements SubscriptionStore
+      pushTargetStore: myStore, // implements PushTargetStore
     }),
   ],
 })
@@ -42,18 +42,18 @@ import { usePushPermission, usePushSubscription } from '@idevconn/push-notificat
 ## TypeORM adapter
 
 ```ts
-import { PushSubscriptionEntity, TypeOrmSubscriptionStore } from '@idevconn/push-notifications/typeorm';
+import { PushTargetEntity, TypeOrmPushTargetStore } from '@idevconn/push-notifications/typeorm';
 ```
 
 ## Custom storage (Supabase, MongoDB, raw Postgres/MySQL, etc.)
 
-The TypeORM adapter above is just one pre-built option. `SubscriptionStore` and
+The TypeORM adapter above is just one pre-built option. `PushTargetStore` and
 `NotificationLogStore` are plain interfaces — this package has no opinion on
 your database. Implement the four methods against whatever client you
-already use and pass it as `subscriptionStore`/`notificationLogStore`.
+already use and pass it as `pushTargetStore`/`notificationLogStore`.
 
 ```ts
-interface SubscriptionStore {
+interface PushTargetStore {
   save(userId: string, target: PushTarget): Promise<void>;
   findByUserId(userId: string): Promise<PushTarget[]>;
   delete(userId: string, target: PushTarget): Promise<void>;
@@ -65,9 +65,9 @@ interface SubscriptionStore {
 
 ```ts
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { SubscriptionStore, PushTarget } from '@idevconn/push-notifications';
+import type { PushTargetStore, PushTarget } from '@idevconn/push-notifications';
 
-export class SupabaseSubscriptionStore implements SubscriptionStore {
+export class SupabasePushTargetStore implements PushTargetStore {
   constructor(private readonly supabase: SupabaseClient) {}
 
   async save(userId: string, target: PushTarget): Promise<void> {
@@ -89,16 +89,16 @@ export class SupabaseSubscriptionStore implements SubscriptionStore {
   }
 }
 
-// PushNotificationModule.forRoot({ ..., subscriptionStore: new SupabaseSubscriptionStore(supabase) })
+// PushNotificationModule.forRoot({ ..., pushTargetStore: new SupabasePushTargetStore(supabase) })
 ```
 
 **MongoDB** (collection `pushSubscriptions` with `{ userId, target }` documents):
 
 ```ts
 import type { Collection } from 'mongodb';
-import type { SubscriptionStore, PushTarget } from '@idevconn/push-notifications';
+import type { PushTargetStore, PushTarget } from '@idevconn/push-notifications';
 
-export class MongoSubscriptionStore implements SubscriptionStore {
+export class MongoPushTargetStore implements PushTargetStore {
   constructor(private readonly collection: Collection<{ userId: string; target: PushTarget }>) {}
 
   async save(userId: string, target: PushTarget): Promise<void> {

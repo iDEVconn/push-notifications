@@ -1,16 +1,16 @@
 import { DynamicModule, InjectionToken, Module, OptionalFactoryDependency, Provider } from '@nestjs/common';
 import { PushService, PushServiceConfig } from './push.service';
-import { SUBSCRIPTION_STORE, SubscriptionStore } from '../index';
+import { PUSH_TARGET_STORE, PushTargetStore } from '../index';
 
 export interface PushNotificationModuleConfig extends PushServiceConfig {
-  subscriptionStore: SubscriptionStore;
+  pushTargetStore: PushTargetStore;
 }
 
 const CONFIG_TOKEN = Symbol('PUSH_NOTIFICATION_MODULE_CONFIG');
 
 function validateConfig(config: PushNotificationModuleConfig): void {
-  if (!config.subscriptionStore) {
-    throw new Error('PushNotificationModule: subscriptionStore is required');
+  if (!config.pushTargetStore) {
+    throw new Error('PushNotificationModule: pushTargetStore is required');
   }
   if (config.webpush) {
     const { vapidPublicKey, vapidPrivateKey, subject } = config.webpush;
@@ -33,14 +33,14 @@ const pushServiceProvider: Provider = {
   provide: PushService,
   useFactory: (config: PushNotificationModuleConfig) => {
     validateConfig(config);
-    return new PushService(config, config.subscriptionStore);
+    return new PushService(config, config.pushTargetStore);
   },
   inject: [CONFIG_TOKEN],
 };
 
-const subscriptionStoreProvider: Provider = {
-  provide: SUBSCRIPTION_STORE,
-  useFactory: (config: PushNotificationModuleConfig) => config.subscriptionStore,
+const pushTargetStoreProvider: Provider = {
+  provide: PUSH_TARGET_STORE,
+  useFactory: (config: PushNotificationModuleConfig) => config.pushTargetStore,
   inject: [CONFIG_TOKEN],
 };
 
@@ -49,8 +49,8 @@ export class PushNotificationModule {
   static forRoot(config: PushNotificationModuleConfig): DynamicModule {
     return {
       module: PushNotificationModule,
-      providers: [{ provide: CONFIG_TOKEN, useValue: config }, pushServiceProvider, subscriptionStoreProvider],
-      exports: [PushService, SUBSCRIPTION_STORE],
+      providers: [{ provide: CONFIG_TOKEN, useValue: config }, pushServiceProvider, pushTargetStoreProvider],
+      exports: [PushService, PUSH_TARGET_STORE],
     };
   }
 
@@ -69,9 +69,9 @@ export class PushNotificationModule {
       providers: [
         { provide: CONFIG_TOKEN, useFactory: options.useFactory, inject: options.inject ?? [] },
         pushServiceProvider,
-        subscriptionStoreProvider,
+        pushTargetStoreProvider,
       ],
-      exports: [PushService, SUBSCRIPTION_STORE],
+      exports: [PushService, PUSH_TARGET_STORE],
     };
   }
 }
