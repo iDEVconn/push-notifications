@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 const sendNotificationMock = vi.fn();
 vi.mock('web-push', () => ({
@@ -19,10 +19,9 @@ const target: PushTarget = {
 
 const config = { vapidPublicKey: 'pub', vapidPrivateKey: 'priv', subject: 'mailto:a@b.com' };
 
-beforeEach(() => sendNotificationMock.mockReset());
-
 describe('sendWebPush', () => {
   it('returns success on 201/200 response', async () => {
+    sendNotificationMock.mockReset();
     sendNotificationMock.mockResolvedValue({ statusCode: 201 });
     const result = await sendWebPush(target, { title: 't', body: 'b' }, config);
     expect(result.success).toBe(true);
@@ -30,6 +29,7 @@ describe('sendWebPush', () => {
   });
 
   it('flags dead token on 410 Gone', async () => {
+    sendNotificationMock.mockReset();
     sendNotificationMock.mockRejectedValue(Object.assign(new Error('Gone'), { statusCode: 410, body: 'gone' }));
     const result = await sendWebPush(target, { title: 't', body: 'b' }, config);
     expect(result.success).toBe(false);
@@ -38,12 +38,14 @@ describe('sendWebPush', () => {
   });
 
   it('flags dead token on 404 Not Found', async () => {
+    sendNotificationMock.mockReset();
     sendNotificationMock.mockRejectedValue(Object.assign(new Error('Not Found'), { statusCode: 404, body: 'not found' }));
     const result = await sendWebPush(target, { title: 't', body: 'b' }, config);
     expect(result.error?.isDeadToken).toBe(true);
   });
 
   it('returns non-fatal error on other failures', async () => {
+    sendNotificationMock.mockReset();
     sendNotificationMock.mockRejectedValue(Object.assign(new Error('Server Error'), { statusCode: 500, body: 'server error' }));
     const result = await sendWebPush(target, { title: 't', body: 'b' }, config);
     expect(result.success).toBe(false);
@@ -52,6 +54,7 @@ describe('sendWebPush', () => {
   });
 
   it('rejects non-https endpoints without attempting to send', async () => {
+    sendNotificationMock.mockReset();
     const httpTarget: PushTarget = {
       type: 'webpush',
       userId: 'user-1',
@@ -64,6 +67,7 @@ describe('sendWebPush', () => {
   });
 
   it('rejects endpoints pointing at private or loopback hosts', async () => {
+    sendNotificationMock.mockReset();
     const privateTarget: PushTarget = {
       type: 'webpush',
       userId: 'user-1',
