@@ -135,7 +135,7 @@ src/
     "test:watch": "vitest",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build && npm run lint"
   },
   "peerDependencies": {
     "@nestjs/common": ">=11.0.0",
