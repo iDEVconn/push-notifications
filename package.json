@@ -1,0 +1,103 @@
+{
+  "name": "@idevconn/push-notifications",
+  "version": "0.1.0",
+  "description": "Host-agnostic push notifications: Web Push/VAPID, FCM, APNs sending, a NestJS module, and React 19 hooks.",
+  "license": "Apache-2.0",
+  "author": "iDEVconn",
+  "repository": { "type": "git", "url": "git+https://github.com/iDEVconn/push-notifications.git" },
+  "bugs": { "url": "https://github.com/iDEVconn/push-notifications/issues" },
+  "homepage": "https://github.com/iDEVconn/push-notifications#readme",
+  "keywords": ["push", "notifications", "webpush", "vapid", "fcm", "apns", "nestjs", "react"],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    },
+    "./server": {
+      "import": { "types": "./dist/server.d.ts", "default": "./dist/server.js" },
+      "require": { "types": "./dist/server.d.cts", "default": "./dist/server.cjs" }
+    },
+    "./react": {
+      "import": { "types": "./dist/react.d.ts", "default": "./dist/react.js" },
+      "require": { "types": "./dist/react.d.cts", "default": "./dist/react.cjs" }
+    },
+    "./typeorm": {
+      "import": { "types": "./dist/typeorm.d.ts", "default": "./dist/typeorm.js" },
+      "require": { "types": "./dist/typeorm.d.cts", "default": "./dist/typeorm.cjs" }
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "server": ["./dist/server.d.ts"],
+      "react": ["./dist/react.d.ts"],
+      "typeorm": ["./dist/typeorm.d.ts"]
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+  },
+  "peerDependencies": {
+    "@nestjs/common": ">=11.0.0",
+    "@nestjs/core": ">=11.0.0",
+    "react": ">=19.0.0",
+    "web-push": ">=3.6.0",
+    "firebase-admin": ">=12.0.0",
+    "@parse/node-apn": ">=6.0.0",
+    "typeorm": ">=0.3.0",
+    "@nestjs/typeorm": ">=10.0.0",
+    "firebase": ">=10.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@nestjs/common": { "optional": true },
+    "@nestjs/core": { "optional": true },
+    "react": { "optional": true },
+    "web-push": { "optional": true },
+    "firebase-admin": { "optional": true },
+    "@parse/node-apn": { "optional": true },
+    "typeorm": { "optional": true },
+    "@nestjs/typeorm": { "optional": true },
+    "firebase": { "optional": true }
+  },
+  "devDependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/testing": "^11.0.0",
+    "@nestjs/typeorm": "^10.0.2",
+    "@parse/node-apn": "^6.0.1",
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/jest-dom": "^6.5.0",
+    "@testing-library/react": "^16.0.1",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/web-push": "^3.6.4",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "firebase": "^10.14.0",
+    "firebase-admin": "^12.6.0",
+    "jsdom": "^25.0.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "sqlite3": "^5.1.7",
+    "tsup": "^8.3.0",
+    "typeorm": "^0.3.20",
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.7",
+    "web-push": "^3.6.7"
+  },
+  "publishConfig": { "access": "public" }
+}
