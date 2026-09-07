@@ -1,4 +1,4 @@
-import { DynamicModule, Module, Provider } from '@nestjs/common';
+import { DynamicModule, InjectionToken, Module, OptionalFactoryDependency, Provider } from '@nestjs/common';
 import { PushService, PushServiceConfig } from './push.service';
 import { SUBSCRIPTION_STORE, SubscriptionStore } from '../index';
 
@@ -52,8 +52,8 @@ export class PushNotificationModule {
   }
 
   static forRootAsync(options: {
-    useFactory: (...args: never[]) => PushNotificationModuleConfig | Promise<PushNotificationModuleConfig>;
-    inject?: never[];
+    useFactory: (...args: any[]) => PushNotificationModuleConfig | Promise<PushNotificationModuleConfig>;
+    inject?: (InjectionToken | OptionalFactoryDependency)[];
   }): DynamicModule {
     return {
       module: PushNotificationModule,
