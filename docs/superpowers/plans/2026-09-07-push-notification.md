@@ -1814,6 +1814,8 @@ Expected: FAIL — modules not found.
 
 - [ ] **Step 3: Write the entities**
 
+Every field uses a definite-assignment assertion (`!`) — under this project's `strict: true` tsconfig (`strictPropertyInitialization`), a field with no initializer trips `TS2564` because TypeScript can't see that the TypeORM decorator populates it at runtime. This is the standard pattern for TypeORM entities under strict TypeScript.
+
 `src/typeorm/push-subscription.entity.ts`:
 
 ```ts
@@ -1823,16 +1825,16 @@ import type { PushTarget } from '../index';
 @Entity()
 export class PushSubscriptionEntity {
   @PrimaryGeneratedColumn('uuid')
-  id: string;
+  id!: string;
 
   @Column()
-  userId: string;
+  userId!: string;
 
   @Column({ type: 'simple-json' })
-  target: PushTarget;
+  target!: PushTarget;
 
   @CreateDateColumn()
-  createdAt: Date;
+  createdAt!: Date;
 }
 ```
 
@@ -1844,22 +1846,22 @@ import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn } from 'typeor
 @Entity()
 export class NotificationEntity {
   @PrimaryGeneratedColumn('uuid')
-  id: string;
+  id!: string;
 
   @Column()
-  userId: string;
+  userId!: string;
 
   @Column()
-  title: string;
+  title!: string;
 
   @Column()
-  body: string;
+  body!: string;
 
   @Column({ default: false })
-  isRead: boolean;
+  isRead!: boolean;
 
   @CreateDateColumn()
-  createdAt: Date;
+  createdAt!: Date;
 }
 ```
 
@@ -1897,7 +1899,7 @@ export class TypeOrmSubscriptionStore implements SubscriptionStore {
 }
 ```
 
-`src/typeorm/typeorm-notification-log-store.ts`:
+`src/typeorm/typeorm-notification-log-store.ts`. `save()` explicitly stamps `createdAt` in JS rather than relying on `@CreateDateColumn`'s DB-side default — on SQLite, TypeORM inlines that default (`datetime('now')`) literally into the INSERT statement (SQLite has no DEFAULT-expression support in INSERT), and SQLite's `datetime('now')` only has whole-second resolution. Two saves within the same second get identical `createdAt`, and ties resolve to insertion order rather than reverse-insertion order — breaking "newest first" ordering. A plain `new Date()` per call isn't sufficient either (two calls can land in the same millisecond); a monotonically-bumped timestamp guarantees strictly increasing values regardless of clock/DB resolution:
 
 ```ts
 import type { Repository } from 'typeorm';
@@ -1905,10 +1907,16 @@ import type { NotificationLogStore, NotificationRecord } from '../index';
 import { NotificationEntity } from './notification.entity';
 
 export class TypeOrmNotificationLogStore implements NotificationLogStore {
+  private lastTimestampMs = 0;
+
   constructor(private readonly repo: Repository<NotificationEntity>) {}
 
   async save(record: { userId: string; title: string; body: string }): Promise<NotificationRecord> {
-    const saved = await this.repo.save(this.repo.create(record));
+    const now = Date.now();
+    this.lastTimestampMs = now > this.lastTimestampMs ? now : this.lastTimestampMs + 1;
+    const saved = await this.repo.save(
+      this.repo.create({ ...record, createdAt: new Date(this.lastTimestampMs) }),
+    );
     return saved;
   }
 
