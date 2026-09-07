@@ -19,6 +19,11 @@ const PRIVATE_HOSTNAME_PATTERNS = [
   /^\[?::1\]?$/,
   /^f[cd][0-9a-f]{2}:/i,
   /^fe80:/i,
+  // IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1, normalized by the WHATWG URL
+  // parser to ::ffff:7f00:1) tunnel an arbitrary IPv4 target through an IPv6 literal.
+  // Block the whole ::ffff:/96 range rather than trying to enumerate the private ranges
+  // in their hex-encoded form — this guard's job is to be restrictive, not permissive.
+  /^::ffff:/i,
 ];
 
 function isDisallowedEndpoint(endpoint: string): boolean {
@@ -29,7 +34,9 @@ function isDisallowedEndpoint(endpoint: string): boolean {
     return true;
   }
   if (url.protocol !== 'https:') return true;
-  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+  // Strip a trailing root "." (e.g. "localhost.") — DNS resolves it identically to the
+  // name without the dot, so it must not bypass the pattern checks below.
+  const hostname = url.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
   return PRIVATE_HOSTNAME_PATTERNS.some((pattern) => pattern.test(hostname));
 }
 
@@ -49,10 +56,10 @@ export async function sendWebPush(
     };
   }
 
-  const webpush = (await import('web-push')).default;
-  webpush.setVapidDetails(config.subject, config.vapidPublicKey, config.vapidPrivateKey);
-
   try {
+    const webpush = (await import('web-push')).default;
+    webpush.setVapidDetails(config.subject, config.vapidPublicKey, config.vapidPrivateKey);
+
     await webpush.sendNotification(target.subscription, JSON.stringify(payload));
     return { target, success: true };
   } catch (err) {
@@ -61,7 +68,9 @@ export async function sendWebPush(
       target,
       success: false,
       error: {
-        code: String(statusCode),
+        // A missing/zero statusCode means this never reached the push service —
+        // it's an SDK-load or init failure (bad import, malformed VAPID config), not a send failure.
+        code: statusCode ? String(statusCode) : 'init-error',
         // Don't propagate the raw upstream response body — it may echo back
         // content from a host we didn't intend to contact.
         message: 'Web Push send failed',

@@ -82,6 +82,23 @@ describe('PushService', () => {
     expect(store.delete).not.toHaveBeenCalled();
   });
 
+  it('resolves with the original SendResult when the auto-prune delete rejects', async () => {
+    sendFcmMock.mockResolvedValue({
+      target: fcmTarget,
+      success: false,
+      error: { code: 'InvalidRegistration', message: 'dead', isDeadToken: true },
+    });
+    const store = makeStore();
+    (store.delete as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('store unavailable'));
+    const service = new PushService({ fcm: { serviceAccount: {} } }, store);
+
+    const result = await service.send(fcmTarget, { title: 't', body: 'b' });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.isDeadToken).toBe(true);
+    expect(store.delete).toHaveBeenCalledWith('user-1', fcmTarget);
+  });
+
   it('sendBulk isolates per-target failures', async () => {
     sendFcmMock
       .mockResolvedValueOnce({ target: fcmTarget, success: true })

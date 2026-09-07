@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, HttpCode, HttpStatus, Inject, Post, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, HttpCode, HttpStatus, Inject, Post, Req } from '@nestjs/common';
 import { NOTIFICATION_WEBHOOK_VERIFIER } from '../index';
 import type { PushTarget, NotificationWebhookVerifier } from '../index';
 import { PushService } from './push.service';
@@ -34,6 +34,9 @@ export class NotificationWebhookController {
       throw new ForbiddenException();
     }
     if (body.status === 'failed') {
+      if (!body.userId || !body.target?.type) {
+        throw new BadRequestException('delivery-report: userId and target are required when status is failed');
+      }
       await this.pushService.pruneTarget(body.userId, body.target);
     }
     return { received: true };

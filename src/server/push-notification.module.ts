@@ -9,6 +9,9 @@ export interface PushNotificationModuleConfig extends PushServiceConfig {
 const CONFIG_TOKEN = Symbol('PUSH_NOTIFICATION_MODULE_CONFIG');
 
 function validateConfig(config: PushNotificationModuleConfig): void {
+  if (!config.subscriptionStore) {
+    throw new Error('PushNotificationModule: subscriptionStore is required');
+  }
   if (config.webpush) {
     const { vapidPublicKey, vapidPrivateKey, subject } = config.webpush;
     if (!vapidPublicKey || !vapidPrivateKey || !subject) {

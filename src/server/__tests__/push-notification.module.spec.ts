@@ -62,4 +62,12 @@ describe('PushNotificationModule', () => {
       Test.createTestingModule({ imports: [PushNotificationModule.forRoot(badConfig)] }).compile(),
     ).rejects.toThrow(/webpush/i);
   });
+
+  it('throws at bootstrap when subscriptionStore is missing', async () => {
+    await expect(
+      Test.createTestingModule({
+        imports: [PushNotificationModule.forRoot({ subscriptionStore: undefined as never })],
+      }).compile(),
+    ).rejects.toThrow(/subscriptionStore/i);
+  });
 });

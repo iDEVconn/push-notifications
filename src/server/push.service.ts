@@ -26,7 +26,11 @@ export class PushService {
     const result = await this.dispatch(target, payload);
 
     if (!result.success && result.error?.isDeadToken && (this.config.autoPruneOnFailure ?? true)) {
-      await this.store.delete(target.userId, target);
+      try {
+        await this.store.delete(target.userId, target);
+      } catch {
+        // Best-effort cleanup — a failed prune must not turn a captured SendResult into a thrown exception.
+      }
     }
 
     return result;

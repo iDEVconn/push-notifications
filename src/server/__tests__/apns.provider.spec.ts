@@ -58,4 +58,32 @@ describe('sendApns', () => {
     const result = await sendApns(target, { title: 't', body: 'b' }, config);
     expect(result.error?.isDeadToken).toBe(false);
   });
+
+  it('returns a failure result rather than throwing when Provider construction fails', async () => {
+    // cachedProvider is module-scoped in apns.provider.ts and already populated by the earlier
+    // tests in this file, so simply making MockProvider throw wouldn't exercise the construction
+    // path again. Reset the module registry and swap in a constructor that throws so a fresh
+    // module instance actually calls `new apn.Provider(...)` and hits the failure.
+    class ThrowingProvider {
+      constructor() {
+        throw new Error('bad token/key');
+      }
+      send = sendMock;
+    }
+    vi.resetModules();
+    vi.doMock('@parse/node-apn', () => ({
+      default: { Provider: ThrowingProvider, Notification: MockNotification },
+    }));
+
+    const { sendApns: sendApnsFresh } = await import('../providers/apns.provider');
+    const result = await sendApnsFresh(target, { title: 't', body: 'b' }, config);
+    expect(result.success).toBe(false);
+    expect(result.error?.isDeadToken).toBe(false);
+
+    // Restore the original mock so the module registry is clean for any other test files/runs.
+    vi.resetModules();
+    vi.doMock('@parse/node-apn', () => ({
+      default: { Provider: MockProvider, Notification: MockNotification },
+    }));
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { NotificationWebhookController } from '../notification-webhook.controller';
 import { PushService } from '../push.service';
 import type { NotificationWebhookVerifier } from '../../index';
@@ -47,6 +47,20 @@ describe('NotificationWebhookController', () => {
     );
 
     expect(service.pruneTarget).toHaveBeenCalledWith('user-1', target);
+  });
+
+  it('throws BadRequestException and never touches the service when a verified failed report is missing userId/target', async () => {
+    const service = makeService();
+    const verifier = makeVerifier(true);
+    const controller = new NotificationWebhookController(service, verifier);
+
+    await expect(
+      controller.handleDeliveryReport(
+        { event: 'delivery.failed', status: 'failed' } as never,
+        request,
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(service.pruneTarget).not.toHaveBeenCalled();
   });
 
   it('throws ForbiddenException and never touches the service when verification fails', async () => {

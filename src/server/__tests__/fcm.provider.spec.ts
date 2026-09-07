@@ -55,4 +55,19 @@ describe('sendFcm', () => {
     const result = await sendFcm(target, { title: 't', body: 'b' }, config);
     expect(result.error?.isDeadToken).toBe(false);
   });
+
+  it('returns a failure result rather than throwing when SDK acquisition fails', async () => {
+    // By this point cachedApp is already populated from earlier tests, so admin.initializeApp
+    // won't be re-invoked — simulate the init/acquisition failure via admin.messaging() itself,
+    // which is what getMessaging() in the provider calls on every invocation regardless of caching.
+    // This still proves the try/catch in sendFcm catches an SDK-acquisition failure, not just a send failure.
+    sendMock.mockReset();
+    getMessagingMock.mockImplementationOnce(() => {
+      throw new Error('failed to acquire messaging client');
+    });
+    const result = await sendFcm(target, { title: 't', body: 'b' }, config);
+    expect(result.success).toBe(false);
+    expect(result.error?.isDeadToken).toBe(false);
+    getMessagingMock.mockImplementation(() => ({ send: sendMock }));
+  });
 });
