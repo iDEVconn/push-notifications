@@ -1,6 +1,6 @@
 {
   "name": "@idevconn/push-notifications",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Host-agnostic push notifications: Web Push/VAPID, FCM, APNs sending, a NestJS module, and React 19 hooks.",
   "license": "Apache-2.0",
   "author": "iDEVconn",
