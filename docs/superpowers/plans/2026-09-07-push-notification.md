@@ -293,8 +293,11 @@ export default defineConfig({
 - [ ] **Step 6: Write `vitest.setup.ts`**
 
 ```ts
+import 'reflect-metadata';
 import '@testing-library/jest-dom';
 ```
+
+**Note:** `reflect-metadata` is imported here (not just left as an ambient devDependency) because TypeORM's `@Column()` decorator — used without an explicit `type` — infers column types via `Reflect.getMetadata`, which does nothing until this polyfill has run. Task 10's tests would fail without it if this weren't imported before entity classes load.
 
 - [ ] **Step 7: Write `.gitignore`**
 
