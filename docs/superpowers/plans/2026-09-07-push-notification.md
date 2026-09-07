@@ -4,7 +4,7 @@
 
 **Goal:** Build `@idevconn/push-notifications` — a Nest 11 + React 19 dual-export package for sending push (Web Push/VAPID, FCM, APNs), managing subscriptions, and tracking notification history.
 
-**Architecture:** Provider-agnostic `PushService` dispatches to lazy-loaded Web Push / FCM / APNs providers. Storage is interface-only (`SubscriptionStore`, `NotificationLogStore`) with an optional TypeORM adapter. React hooks cover browser-side permission + subscription (VAPID native + FCM web token). tsup builds four entry points (`.`, `./server`, `./react`, `./typeorm`) as dual ESM/CJS.
+**Architecture:** Provider-agnostic `PushService` dispatches to lazy-loaded Web Push / FCM / APNs providers. Storage is interface-only (`PushTargetStore`, `NotificationLogStore`) with an optional TypeORM adapter. React hooks cover browser-side permission + subscription (VAPID native + FCM web token). tsup builds four entry points (`.`, `./server`, `./react`, `./typeorm`) as dual ESM/CJS.
 
 **Tech Stack:** TypeScript 5, tsup, vitest, Nest 11 (`@nestjs/common` ^11, `@nestjs/core` ^11), React 19, `web-push`, `firebase-admin`, `@parse/node-apn`, `typeorm` + `@nestjs/typeorm` — all optional peer deps.
 
@@ -16,7 +16,7 @@
 - React peer dep floor: `>=19.0.0`.
 - Provider SDKs (`web-push`, `firebase-admin`, `@parse/node-apn`, `typeorm`, `@nestjs/typeorm`, `firebase`) are **optional** peer deps, lazy-`require`d/dynamically imported — installing the package must not force any of them.
 - Package is `type: module`, dual ESM/CJS output via tsup, matching `@idevconn/ai-usage`'s exports-map pattern.
-- No default in-memory store implementation — `SubscriptionStore`/`NotificationLogStore` have no fallback; consumer must wire one explicitly.
+- No default in-memory store implementation — `PushTargetStore`/`NotificationLogStore` have no fallback; consumer must wire one explicitly.
 - Per-target send failures never throw — always captured in `SendResult.error`. Config/init errors throw synchronously at module bootstrap.
 - Dead-token codes: Web Push HTTP `410`/`404`; FCM `messaging/registration-token-not-registered` / `InvalidRegistration`; APNs `BadDeviceToken` / `Unregistered`.
 
@@ -35,7 +35,7 @@ src/
     notification.controller.ts
     notification-webhook.controller.ts
     interfaces/
-      subscription-store.interface.ts
+      push-target-store.interface.ts
       notification-log-store.interface.ts
     providers/
       webpush.provider.ts
@@ -59,12 +59,12 @@ src/
       use-push-subscription-fcm.test.tsx
   typeorm/
     index.ts                                barrel (./typeorm export)
-    push-subscription.entity.ts
+    push-target.entity.ts
     notification.entity.ts
-    typeorm-subscription-store.ts
+    typeorm-push-target-store.ts
     typeorm-notification-log-store.ts
     __tests__/
-      typeorm-subscription-store.spec.ts
+      typeorm-push-target-store.spec.ts
       typeorm-notification-log-store.spec.ts
 ```
 
@@ -342,7 +342,7 @@ git commit -m "chore: scaffold package tooling"
 - Test: `src/__tests__/index.spec.ts`
 
 **Interfaces:**
-- Produces: `PushPayload`, `PushTarget`, `SendResult`, `NotificationRecord`, `SubscriptionStore`, `NotificationLogStore`, DI tokens `SUBSCRIPTION_STORE`, `NOTIFICATION_LOG_STORE` — every later task imports these from `../index` (or `../../index` from `__tests__`).
+- Produces: `PushPayload`, `PushTarget`, `SendResult`, `NotificationRecord`, `PushTargetStore`, `NotificationLogStore`, DI tokens `PUSH_TARGET_STORE`, `NOTIFICATION_LOG_STORE` — every later task imports these from `../index` (or `../../index` from `__tests__`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -351,13 +351,13 @@ git commit -m "chore: scaffold package tooling"
 ```ts
 import { describe, it, expect } from 'vitest';
 import {
-  SUBSCRIPTION_STORE,
+  PUSH_TARGET_STORE,
   NOTIFICATION_LOG_STORE,
   NOTIFICATION_AUTHORIZER,
   NOTIFICATION_WEBHOOK_VERIFIER,
 } from '../index';
 
-const TOKENS = [SUBSCRIPTION_STORE, NOTIFICATION_LOG_STORE, NOTIFICATION_AUTHORIZER, NOTIFICATION_WEBHOOK_VERIFIER];
+const TOKENS = [PUSH_TARGET_STORE, NOTIFICATION_LOG_STORE, NOTIFICATION_AUTHORIZER, NOTIFICATION_WEBHOOK_VERIFIER];
 
 describe('DI tokens', () => {
   it('are unique symbols', () => {
@@ -374,14 +374,14 @@ describe('DI tokens', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run src/__tests__/index.spec.ts`
-Expected: FAIL — `SUBSCRIPTION_STORE` not exported.
+Expected: FAIL — `PUSH_TARGET_STORE` not exported.
 
 - [ ] **Step 3: Write implementation**
 
 `src/index.ts`:
 
 ```ts
-export const SUBSCRIPTION_STORE = Symbol('SUBSCRIPTION_STORE');
+export const PUSH_TARGET_STORE = Symbol('PUSH_TARGET_STORE');
 export const NOTIFICATION_LOG_STORE = Symbol('NOTIFICATION_LOG_STORE');
 export const NOTIFICATION_AUTHORIZER = Symbol('NOTIFICATION_AUTHORIZER');
 export const NOTIFICATION_WEBHOOK_VERIFIER = Symbol('NOTIFICATION_WEBHOOK_VERIFIER');
@@ -415,7 +415,7 @@ export interface SendResult {
   error?: SendError;
 }
 
-export interface SubscriptionStore {
+export interface PushTargetStore {
   save(userId: string, target: PushTarget): Promise<void>;
   findByUserId(userId: string): Promise<PushTarget[]>;
   delete(userId: string, target: PushTarget): Promise<void>;
@@ -466,7 +466,7 @@ export interface NotificationWebhookVerifier {
 }
 ```
 
-**Added after Task 8:** `NOTIFICATION_AUTHORIZER`/`NotificationAuthorizer` were not part of this task's original scope — they were added retroactively (see Task 8's section) after a security review found `NotificationController` had no ownership check on its route params. A required, injectable authorizer (same "consumer supplies the implementation, fails closed without one" idiom as `SubscriptionStore`) was the fix, so it lives here alongside the other shared interfaces.
+**Added after Task 8:** `NOTIFICATION_AUTHORIZER`/`NotificationAuthorizer` were not part of this task's original scope — they were added retroactively (see Task 8's section) after a security review found `NotificationController` had no ownership check on its route params. A required, injectable authorizer (same "consumer supplies the implementation, fails closed without one" idiom as `PushTargetStore`) was the fix, so it lives here alongside the other shared interfaces.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -991,16 +991,16 @@ git commit -m "feat: add APNs provider with dead-token detection"
 
 ---
 
-### Task 6: SubscriptionStore/NotificationLogStore interface files + PushService
+### Task 6: PushTargetStore/NotificationLogStore interface files + PushService
 
 **Files:**
-- Create: `src/server/interfaces/subscription-store.interface.ts`
+- Create: `src/server/interfaces/push-target-store.interface.ts`
 - Create: `src/server/interfaces/notification-log-store.interface.ts`
 - Create: `src/server/push.service.ts`
 - Test: `src/server/__tests__/push.service.spec.ts`
 
 **Interfaces:**
-- Consumes: `sendWebPush`/`WebPushConfig` (Task 3), `sendFcm`/`FcmConfig` (Task 4), `sendApns`/`ApnsConfig` (Task 5), `SubscriptionStore`, `PushTarget`, `PushPayload`, `SendResult`, `SUBSCRIPTION_STORE` from `../index`.
+- Consumes: `sendWebPush`/`WebPushConfig` (Task 3), `sendFcm`/`FcmConfig` (Task 4), `sendApns`/`ApnsConfig` (Task 5), `PushTargetStore`, `PushTarget`, `PushPayload`, `SendResult`, `PUSH_TARGET_STORE` from `../index`.
 - Produces: `PushService.send(target, payload)`, `PushService.sendBulk(targets, payload)`, `PushServiceConfig` type, `ProviderNotConfiguredError` class — consumed by `PushNotificationModule` (Task 7).
 
 - [ ] **Step 1: Write the failing test**
@@ -1019,7 +1019,7 @@ vi.mock('../providers/fcm.provider', () => ({ sendFcm: sendFcmMock }));
 vi.mock('../providers/apns.provider', () => ({ sendApns: sendApnsMock }));
 
 import { PushService, ProviderNotConfiguredError } from '../push.service';
-import type { PushTarget, SubscriptionStore } from '../../index';
+import type { PushTarget, PushTargetStore } from '../../index';
 
 const webpushTarget: PushTarget = {
   type: 'webpush',
@@ -1028,7 +1028,7 @@ const webpushTarget: PushTarget = {
 };
 const fcmTarget: PushTarget = { type: 'fcm', userId: 'user-1', token: 'tok-1' };
 
-function makeStore(): SubscriptionStore {
+function makeStore(): PushTargetStore {
   return {
     save: vi.fn(),
     findByUserId: vi.fn(),
@@ -1114,11 +1114,11 @@ Expected: FAIL — module `../push.service` not found.
 
 - [ ] **Step 3: Write the interface files**
 
-`src/server/interfaces/subscription-store.interface.ts`:
+`src/server/interfaces/push-target-store.interface.ts`:
 
 ```ts
-export type { SubscriptionStore } from '../../index';
-export { SUBSCRIPTION_STORE } from '../../index';
+export type { PushTargetStore } from '../../index';
+export { PUSH_TARGET_STORE } from '../../index';
 ```
 
 `src/server/interfaces/notification-log-store.interface.ts`:
@@ -1131,7 +1131,7 @@ export { NOTIFICATION_LOG_STORE } from '../../index';
 - [ ] **Step 4: Write `push.service.ts`**
 
 ```ts
-import type { PushPayload, PushTarget, SendResult, SubscriptionStore } from '../index';
+import type { PushPayload, PushTarget, SendResult, PushTargetStore } from '../index';
 import { sendWebPush, type WebPushConfig } from './providers/webpush.provider';
 import { sendFcm, type FcmConfig } from './providers/fcm.provider';
 import { sendApns, type ApnsConfig } from './providers/apns.provider';
@@ -1152,7 +1152,7 @@ export class ProviderNotConfiguredError extends Error {
 export class PushService {
   constructor(
     private readonly config: PushServiceConfig,
-    private readonly store: SubscriptionStore,
+    private readonly store: PushTargetStore,
   ) {}
 
   async send(target: PushTarget, payload: PushPayload): Promise<SendResult> {
@@ -1218,7 +1218,7 @@ git commit -m "feat: add PushService with provider dispatch and auto-prune"
 - Test: `src/server/__tests__/push-notification.module.spec.ts`
 
 **Interfaces:**
-- Consumes: `PushService`, `PushServiceConfig` (Task 6), `SUBSCRIPTION_STORE` (Task 2).
+- Consumes: `PushService`, `PushServiceConfig` (Task 6), `PUSH_TARGET_STORE` (Task 2).
 - Produces: `PushNotificationModule.forRoot(config)`, `.forRootAsync({ useFactory, inject })`, `PushNotificationModuleConfig` — consumed by consumer apps and by Task 14's `server/index.ts` barrel.
 
 - [ ] **Step 1: Write the failing test**
@@ -1231,7 +1231,7 @@ import { Global, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PushNotificationModule, PushNotificationModuleConfig } from '../push-notification.module';
 import { PushService } from '../push.service';
-import { SUBSCRIPTION_STORE } from '../../index';
+import { PUSH_TARGET_STORE } from '../../index';
 
 const dummyStore = { save: async () => {}, findByUserId: async () => [], delete: async () => {}, findAll: async () => [] };
 
@@ -1248,21 +1248,21 @@ describe('PushNotificationModule', () => {
   it('forRoot registers PushService with given config', async () => {
     const config: PushNotificationModuleConfig = {
       webpush: { vapidPublicKey: 'a', vapidPrivateKey: 'b', subject: 'c' },
-      subscriptionStore: dummyStore,
+      pushTargetStore: dummyStore,
     };
     const moduleRef = await Test.createTestingModule({
       imports: [PushNotificationModule.forRoot(config)],
     }).compile();
 
     expect(moduleRef.get(PushService)).toBeInstanceOf(PushService);
-    expect(moduleRef.get(SUBSCRIPTION_STORE)).toBe(dummyStore);
+    expect(moduleRef.get(PUSH_TARGET_STORE)).toBe(dummyStore);
   });
 
   it('forRootAsync resolves config via factory', async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
         PushNotificationModule.forRootAsync({
-          useFactory: () => ({ fcm: { serviceAccount: {} }, subscriptionStore: dummyStore }),
+          useFactory: () => ({ fcm: { serviceAccount: {} }, pushTargetStore: dummyStore }),
         }),
       ],
     }).compile();
@@ -1275,7 +1275,7 @@ describe('PushNotificationModule', () => {
       imports: [
         ExtraConfigModule,
         PushNotificationModule.forRootAsync({
-          useFactory: (extra: { serviceAccount: object }) => ({ fcm: extra, subscriptionStore: dummyStore }),
+          useFactory: (extra: { serviceAccount: object }) => ({ fcm: extra, pushTargetStore: dummyStore }),
           inject: [EXTRA_CONFIG],
         }),
       ],
@@ -1285,7 +1285,7 @@ describe('PushNotificationModule', () => {
   });
 
   it('throws at bootstrap when webpush config is missing required fields', async () => {
-    const badConfig = { webpush: { vapidPublicKey: 'a' } as never, subscriptionStore: dummyStore };
+    const badConfig = { webpush: { vapidPublicKey: 'a' } as never, pushTargetStore: dummyStore };
     await expect(
       Test.createTestingModule({ imports: [PushNotificationModule.forRoot(badConfig)] }).compile(),
     ).rejects.toThrow(/webpush/i);
@@ -1305,10 +1305,10 @@ Expected: FAIL — module `../push-notification.module` not found.
 ```ts
 import { DynamicModule, InjectionToken, Module, OptionalFactoryDependency, Provider } from '@nestjs/common';
 import { PushService, PushServiceConfig } from './push.service';
-import { SUBSCRIPTION_STORE, SubscriptionStore } from '../index';
+import { PUSH_TARGET_STORE, PushTargetStore } from '../index';
 
 export interface PushNotificationModuleConfig extends PushServiceConfig {
-  subscriptionStore: SubscriptionStore;
+  pushTargetStore: PushTargetStore;
 }
 
 const CONFIG_TOKEN = Symbol('PUSH_NOTIFICATION_MODULE_CONFIG');
@@ -1335,14 +1335,14 @@ const pushServiceProvider: Provider = {
   provide: PushService,
   useFactory: (config: PushNotificationModuleConfig) => {
     validateConfig(config);
-    return new PushService(config, config.subscriptionStore);
+    return new PushService(config, config.pushTargetStore);
   },
   inject: [CONFIG_TOKEN],
 };
 
-const subscriptionStoreProvider: Provider = {
-  provide: SUBSCRIPTION_STORE,
-  useFactory: (config: PushNotificationModuleConfig) => config.subscriptionStore,
+const pushTargetStoreProvider: Provider = {
+  provide: PUSH_TARGET_STORE,
+  useFactory: (config: PushNotificationModuleConfig) => config.pushTargetStore,
   inject: [CONFIG_TOKEN],
 };
 
@@ -1351,8 +1351,8 @@ export class PushNotificationModule {
   static forRoot(config: PushNotificationModuleConfig): DynamicModule {
     return {
       module: PushNotificationModule,
-      providers: [{ provide: CONFIG_TOKEN, useValue: config }, pushServiceProvider, subscriptionStoreProvider],
-      exports: [PushService, SUBSCRIPTION_STORE],
+      providers: [{ provide: CONFIG_TOKEN, useValue: config }, pushServiceProvider, pushTargetStoreProvider],
+      exports: [PushService, PUSH_TARGET_STORE],
     };
   }
 
@@ -1365,9 +1365,9 @@ export class PushNotificationModule {
       providers: [
         { provide: CONFIG_TOKEN, useFactory: options.useFactory, inject: options.inject ?? [] },
         pushServiceProvider,
-        subscriptionStoreProvider,
+        pushTargetStoreProvider,
       ],
-      exports: [PushService, SUBSCRIPTION_STORE],
+      exports: [PushService, PUSH_TARGET_STORE],
     };
   }
 }
@@ -1397,7 +1397,7 @@ git commit -m "feat: add PushNotificationModule with forRoot/forRootAsync"
 - Consumes: `NotificationLogStore`, `NOTIFICATION_LOG_STORE`, `NotificationAuthorizer`, `NOTIFICATION_AUTHORIZER` from `../index`.
 - Produces: `NotificationController` (Nest controller, `@Inject(NOTIFICATION_LOG_STORE)` + `@Inject(NOTIFICATION_AUTHORIZER)`) — consumed by `server/index.ts` barrel (Task 14).
 
-**Revision history:** the version below is the corrected, final form. A first pass shipped with no authorization at all (just `@Inject(NOTIFICATION_LOG_STORE)`, no ownership check on `:userId`/`:id`) and was caught by an automated security review as a HIGH-severity IDOR — any caller could read or mark-as-read any user's notifications. A doc-comment-only mitigation was tried first and rejected on re-review as inadequate (advisory-only, fails open). The fix below makes `NOTIFICATION_AUTHORIZER` a required constructor dependency — Nest fails to bootstrap without one — mirroring the same "consumer supplies the implementation, fails closed" idiom already used for `SubscriptionStore`.
+**Revision history:** the version below is the corrected, final form. A first pass shipped with no authorization at all (just `@Inject(NOTIFICATION_LOG_STORE)`, no ownership check on `:userId`/`:id`) and was caught by an automated security review as a HIGH-severity IDOR — any caller could read or mark-as-read any user's notifications. A doc-comment-only mitigation was tried first and rejected on re-review as inadequate (advisory-only, fails open). The fix below makes `NOTIFICATION_AUTHORIZER` a required constructor dependency — Nest fails to bootstrap without one — mirroring the same "consumer supplies the implementation, fails closed" idiom already used for `PushTargetStore`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1699,47 +1699,47 @@ git commit -m "feat: add opt-in NotificationWebhookController with required sign
 ### Task 10: TypeORM adapter
 
 **Files:**
-- Create: `src/typeorm/push-subscription.entity.ts`
+- Create: `src/typeorm/push-target.entity.ts`
 - Create: `src/typeorm/notification.entity.ts`
-- Create: `src/typeorm/typeorm-subscription-store.ts`
+- Create: `src/typeorm/typeorm-push-target-store.ts`
 - Create: `src/typeorm/typeorm-notification-log-store.ts`
-- Test: `src/typeorm/__tests__/typeorm-subscription-store.spec.ts`
+- Test: `src/typeorm/__tests__/typeorm-push-target-store.spec.ts`
 - Test: `src/typeorm/__tests__/typeorm-notification-log-store.spec.ts`
 
 **Interfaces:**
-- Consumes: `SubscriptionStore`, `NotificationLogStore`, `PushTarget`, `NotificationRecord` from `../index`.
-- Produces: `PushSubscriptionEntity`, `NotificationEntity`, `TypeOrmSubscriptionStore`, `TypeOrmNotificationLogStore` — consumed by `typeorm/index.ts` barrel (Task 14).
+- Consumes: `PushTargetStore`, `NotificationLogStore`, `PushTarget`, `NotificationRecord` from `../index`.
+- Produces: `PushTargetEntity`, `NotificationEntity`, `TypeOrmPushTargetStore`, `TypeOrmNotificationLogStore` — consumed by `typeorm/index.ts` barrel (Task 14).
 
 - [ ] **Step 1: Write the failing tests**
 
-`src/typeorm/__tests__/typeorm-subscription-store.spec.ts`:
+`src/typeorm/__tests__/typeorm-push-target-store.spec.ts`:
 
 ```ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { DataSource } from 'typeorm';
-import { PushSubscriptionEntity } from '../push-subscription.entity';
-import { TypeOrmSubscriptionStore } from '../typeorm-subscription-store';
+import { PushTargetEntity } from '../push-target.entity';
+import { TypeOrmPushTargetStore } from '../typeorm-push-target-store';
 import type { PushTarget } from '../../index';
 
 let dataSource: DataSource;
-let store: TypeOrmSubscriptionStore;
+let store: TypeOrmPushTargetStore;
 
 beforeEach(async () => {
   dataSource = new DataSource({
     type: 'sqlite',
     database: ':memory:',
-    entities: [PushSubscriptionEntity],
+    entities: [PushTargetEntity],
     synchronize: true,
   });
   await dataSource.initialize();
-  store = new TypeOrmSubscriptionStore(dataSource.getRepository(PushSubscriptionEntity));
+  store = new TypeOrmPushTargetStore(dataSource.getRepository(PushTargetEntity));
 });
 
 afterEach(async () => dataSource.destroy());
 
 const target: PushTarget = { type: 'fcm', userId: 'user-1', token: 'tok-1' };
 
-describe('TypeOrmSubscriptionStore', () => {
+describe('TypeOrmPushTargetStore', () => {
   it('saves and finds by userId', async () => {
     await store.save('user-1', target);
     const found = await store.findByUserId('user-1');
@@ -1816,14 +1816,14 @@ Expected: FAIL — modules not found.
 
 Every field uses a definite-assignment assertion (`!`) — under this project's `strict: true` tsconfig (`strictPropertyInitialization`), a field with no initializer trips `TS2564` because TypeScript can't see that the TypeORM decorator populates it at runtime. This is the standard pattern for TypeORM entities under strict TypeScript.
 
-`src/typeorm/push-subscription.entity.ts`:
+`src/typeorm/push-target.entity.ts`:
 
 ```ts
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn } from 'typeorm';
 import type { PushTarget } from '../index';
 
 @Entity()
-export class PushSubscriptionEntity {
+export class PushTargetEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
@@ -1867,15 +1867,15 @@ export class NotificationEntity {
 
 - [ ] **Step 4: Write the stores**
 
-`src/typeorm/typeorm-subscription-store.ts`:
+`src/typeorm/typeorm-push-target-store.ts`:
 
 ```ts
 import type { Repository } from 'typeorm';
-import type { PushTarget, SubscriptionStore } from '../index';
-import { PushSubscriptionEntity } from './push-subscription.entity';
+import type { PushTarget, PushTargetStore } from '../index';
+import { PushTargetEntity } from './push-target.entity';
 
-export class TypeOrmSubscriptionStore implements SubscriptionStore {
-  constructor(private readonly repo: Repository<PushSubscriptionEntity>) {}
+export class TypeOrmPushTargetStore implements PushTargetStore {
+  constructor(private readonly repo: Repository<PushTargetEntity>) {}
 
   async save(userId: string, target: PushTarget): Promise<void> {
     await this.repo.save(this.repo.create({ userId, target }));
@@ -1944,7 +1944,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/typeorm/push-subscription.entity.ts src/typeorm/notification.entity.ts src/typeorm/typeorm-subscription-store.ts src/typeorm/typeorm-notification-log-store.ts src/typeorm/__tests__
+git add src/typeorm/push-target.entity.ts src/typeorm/notification.entity.ts src/typeorm/typeorm-push-target-store.ts src/typeorm/typeorm-notification-log-store.ts src/typeorm/__tests__
 git commit -m "feat: add optional TypeORM adapter for subscription and notification log stores"
 ```
 
@@ -2394,9 +2394,9 @@ export { usePushSubscriptionFcm } from './use-push-subscription-fcm';
 - [ ] **Step 3: Write `src/typeorm/index.ts`**
 
 ```ts
-export { PushSubscriptionEntity } from './push-subscription.entity';
+export { PushTargetEntity } from './push-target.entity';
 export { NotificationEntity } from './notification.entity';
-export { TypeOrmSubscriptionStore } from './typeorm-subscription-store';
+export { TypeOrmPushTargetStore } from './typeorm-push-target-store';
 export { TypeOrmNotificationLogStore } from './typeorm-notification-log-store';
 ```
 
@@ -2469,7 +2469,7 @@ import { PushNotificationModule } from '@idevconn/push-notifications/server';
       webpush: { vapidPublicKey, vapidPrivateKey, subject: 'mailto:you@example.com' },
       fcm: { serviceAccount },
       apns: { key, keyId, teamId, bundleId },
-      subscriptionStore: myStore, // implements SubscriptionStore
+      pushTargetStore: myStore, // implements PushTargetStore
     }),
   ],
 })
@@ -2485,7 +2485,7 @@ import { usePushPermission, usePushSubscription } from '@idevconn/push-notificat
 ## TypeORM adapter
 
 \`\`\`ts
-import { PushSubscriptionEntity, TypeOrmSubscriptionStore } from '@idevconn/push-notifications/typeorm';
+import { PushTargetEntity, TypeOrmPushTargetStore } from '@idevconn/push-notifications/typeorm';
 \`\`\`
 
 See \`docs/superpowers/specs/2026-09-07-push-notification-design.md\` for full design rationale.

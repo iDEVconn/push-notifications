@@ -33,7 +33,7 @@ src/
     notification.controller.ts
     notification-webhook.controller.ts
     interfaces/
-      subscription-store.interface.ts
+      push-target-store.interface.ts
       notification-log-store.interface.ts
     providers/
       webpush.provider.ts
@@ -46,9 +46,9 @@ src/
     use-push-subscription-fcm.ts
     __tests__/
   typeorm/        optional TypeORM adapter (exported as "./typeorm")
-    push-subscription.entity.ts
+    push-target.entity.ts
     notification.entity.ts
-    typeorm-subscription-store.ts
+    typeorm-push-target-store.ts
     typeorm-notification-log-store.ts
     __tests__/
 ```
@@ -102,7 +102,7 @@ Dead-token detection per provider, mapped to `isDeadToken: true`:
 - APNs: `BadDeviceToken`, `Unregistered`
 
 When `isDeadToken` and `autoPruneOnFailure` (default true), `PushService`
-calls `SubscriptionStore.delete` internally after the send — no separate
+calls `PushTargetStore.delete` internally after the send — no separate
 cleanup job needed for the three built-in providers.
 
 Provider SDKs (`web-push`, `firebase-admin`, `@parse/node-apn`) are optional
@@ -112,7 +112,7 @@ package doesn't force all three.
 ### Storage interfaces
 
 ```ts
-interface SubscriptionStore {
+interface PushTargetStore {
   save(userId: string, target: PushTarget): Promise<void>;
   findByUserId(userId: string): Promise<PushTarget[]>;
   delete(userId: string, target: PushTarget): Promise<void>;
@@ -126,7 +126,7 @@ interface NotificationLogStore {
 }
 ```
 
-Injected via tokens `SUBSCRIPTION_STORE` / `NOTIFICATION_LOG_STORE`. Consumer
+Injected via tokens `PUSH_TARGET_STORE` / `NOTIFICATION_LOG_STORE`. Consumer
 provides an implementation bound to their own DB. No default in-memory
 implementation shipped (forces explicit wiring, avoids silent data loss in
 prod if someone forgets to configure real storage).
@@ -166,13 +166,13 @@ unless an aggregator is configured to call it.
 
 ### TypeORM adapter (`./typeorm`)
 
-`PushSubscriptionEntity`, `NotificationEntity` (mirrors the Google-suggested
+`PushTargetEntity`, `NotificationEntity` (mirrors the Google-suggested
 shape: `id`, `userId`, `title`, `body`, `isRead`, `createdAt`) +
-`TypeOrmSubscriptionStore`, `TypeOrmNotificationLogStore` implementing the
+`TypeOrmPushTargetStore`, `TypeOrmNotificationLogStore` implementing the
 two interfaces above via `@InjectRepository`. Peer deps `typeorm`,
 `@nestjs/typeorm` optional. Consumer registers entities in their
 `TypeOrmModule.forFeature([...])` and provides the store classes under the
-`SUBSCRIPTION_STORE`/`NOTIFICATION_LOG_STORE` tokens.
+`PUSH_TARGET_STORE`/`NOTIFICATION_LOG_STORE` tokens.
 
 ## React 19 (`./react`, web only)
 
@@ -198,7 +198,7 @@ undefined. `firebase` (client SDK) optional peer dep, dynamically imported.
 
 No APNs hook — no web surface for it; native app collects that token itself
 and posts it to the consumer's backend, which stores it via
-`SubscriptionStore` and sends via `PushService` with `type: 'apns'`.
+`PushTargetStore` and sends via `PushService` with `type: 'apns'`.
 
 ## Error handling
 
@@ -213,7 +213,7 @@ and posts it to the consumer's backend, which stores it via
 
 vitest, mirroring ai-usage's `__tests__` per-directory layout.
 - `PushService`: mock `web-push`/`firebase-admin`/`node-apn`, assert
-  dead-token codes trigger `SubscriptionStore.delete` when
+  dead-token codes trigger `PushTargetStore.delete` when
   `autoPruneOnFailure` true, assert `sendBulk` isolates per-target failures.
 - `NotificationController`/`NotificationWebhookController`: Nest testing
   module with mock stores.

@@ -11,7 +11,7 @@ vi.mock('../providers/fcm.provider', () => ({ sendFcm: sendFcmMock }));
 vi.mock('../providers/apns.provider', () => ({ sendApns: sendApnsMock }));
 
 import { PushService, ProviderNotConfiguredError } from '../push.service';
-import type { PushTarget, SubscriptionStore } from '../../index';
+import type { PushTarget, PushTargetStore } from '../../index';
 
 const webpushTarget: PushTarget = {
   type: 'webpush',
@@ -20,7 +20,7 @@ const webpushTarget: PushTarget = {
 };
 const fcmTarget: PushTarget = { type: 'fcm', userId: 'user-1', token: 'tok-1' };
 
-function makeStore(): SubscriptionStore {
+function makeStore(): PushTargetStore {
   return {
     save: vi.fn(),
     findByUserId: vi.fn(),

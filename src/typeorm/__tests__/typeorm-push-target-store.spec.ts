@@ -1,28 +1,28 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { DataSource } from 'typeorm';
-import { PushSubscriptionEntity } from '../push-subscription.entity';
-import { TypeOrmSubscriptionStore } from '../typeorm-subscription-store';
+import { PushTargetEntity } from '../push-target.entity';
+import { TypeOrmPushTargetStore } from '../typeorm-push-target-store';
 import type { PushTarget } from '../../index';
 
 let dataSource: DataSource;
-let store: TypeOrmSubscriptionStore;
+let store: TypeOrmPushTargetStore;
 
 beforeEach(async () => {
   dataSource = new DataSource({
     type: 'sqlite',
     database: ':memory:',
-    entities: [PushSubscriptionEntity],
+    entities: [PushTargetEntity],
     synchronize: true,
   });
   await dataSource.initialize();
-  store = new TypeOrmSubscriptionStore(dataSource.getRepository(PushSubscriptionEntity));
+  store = new TypeOrmPushTargetStore(dataSource.getRepository(PushTargetEntity));
 });
 
 afterEach(async () => dataSource.destroy());
 
 const target: PushTarget = { type: 'fcm', userId: 'user-1', token: 'tok-1' };
 
-describe('TypeOrmSubscriptionStore', () => {
+describe('TypeOrmPushTargetStore', () => {
   it('saves and finds by userId', async () => {
     await store.save('user-1', target);
     const found = await store.findByUserId('user-1');

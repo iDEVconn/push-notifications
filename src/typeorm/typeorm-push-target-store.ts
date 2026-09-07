@@ -1,9 +1,9 @@
 import type { Repository } from 'typeorm';
-import type { PushTarget, SubscriptionStore } from '../index';
-import { PushSubscriptionEntity } from './push-subscription.entity';
+import type { PushTarget, PushTargetStore } from '../index';
+import { PushTargetEntity } from './push-target.entity';
 
-export class TypeOrmSubscriptionStore implements SubscriptionStore {
-  constructor(private readonly repo: Repository<PushSubscriptionEntity>) {}
+export class TypeOrmPushTargetStore implements PushTargetStore {
+  constructor(private readonly repo: Repository<PushTargetEntity>) {}
 
   async save(userId: string, target: PushTarget): Promise<void> {
     await this.repo.save(this.repo.create({ userId, target }));
