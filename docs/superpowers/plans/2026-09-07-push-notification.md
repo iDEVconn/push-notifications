@@ -1405,12 +1405,24 @@ Expected: FAIL — module `../notification.controller` not found.
 
 - [ ] **Step 3: Write implementation**
 
-`src/server/notification.controller.ts`:
+`src/server/notification.controller.ts`. Note the split import: `NotificationLogStore` must be a `type`-only import here — with this project's `isolatedModules` + `emitDecoratorMetadata` both on, TypeScript errors (`TS1272`) if a type used in a `@Inject`-decorated constructor parameter isn't explicitly imported as a type. `NOTIFICATION_LOG_STORE` stays a normal value import since it's used as the decorator's argument, not just a type.
 
 ```ts
 import { Controller, Get, Param, Patch, Inject } from '@nestjs/common';
-import { NOTIFICATION_LOG_STORE, NotificationLogStore } from '../index';
+import { NOTIFICATION_LOG_STORE } from '../index';
+import type { NotificationLogStore } from '../index';
 
+/**
+ * Not auto-registered by PushNotificationModule — add it to your own
+ * module's `controllers` array to mount it.
+ *
+ * Performs NO authorization: `userId`/`id` come straight from the URL with
+ * no ownership check against the caller. This package has no opinion on
+ * auth (no auth dependency anywhere in it), so guarding this controller is
+ * the consumer's responsibility — put an AuthGuard in front of it and
+ * verify the resolved identity matches `:userId` (and that the record
+ * behind `:id` belongs to the caller) before this ships to production.
+ */
 @Controller('notifications')
 export class NotificationController {
   constructor(@Inject(NOTIFICATION_LOG_STORE) private readonly store: NotificationLogStore) {}
