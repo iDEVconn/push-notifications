@@ -135,7 +135,7 @@ src/
     "test:watch": "vitest",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build && npm run lint"
   },
   "peerDependencies": {
     "@nestjs/common": ">=11.0.0",
@@ -163,7 +163,7 @@ src/
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
-    "@nestjs/typeorm": "^10.0.2",
+    "@nestjs/typeorm": "^11.0.3",
     "@parse/node-apn": "^6.0.1",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.5.0",
@@ -216,7 +216,7 @@ src/
     "noUnusedParameters": true
   },
   "include": ["src"],
-  "exclude": ["dist", "node_modules", "**/__tests__/**"]
+  "exclude": ["dist", "node_modules"]
 }
 ```
 
@@ -253,6 +253,8 @@ export default defineConfig({
 ```
 
 - [ ] **Step 4: Write `eslint.config.js`**
+
+`tsconfig.json`'s `include: ["src"]` (Step 2) covers test files too — `dist` output is controlled by tsup's own entry-point-reachability bundling (Task 14), not by this tsconfig's file list, so including tests here has no build-leakage risk. `eslint.config.js`'s `files` glob below also matches test files for type-aware linting, so it can point straight at the same `tsconfig.json`.
 
 ```js
 import tsPlugin from '@typescript-eslint/eslint-plugin';
@@ -291,8 +293,11 @@ export default defineConfig({
 - [ ] **Step 6: Write `vitest.setup.ts`**
 
 ```ts
+import 'reflect-metadata';
 import '@testing-library/jest-dom';
 ```
+
+**Note:** `reflect-metadata` is imported here (not just left as an ambient devDependency) because TypeORM's `@Column()` decorator — used without an explicit `type` — infers column types via `Reflect.getMetadata`, which does nothing until this polyfill has run. Task 10's tests would fail without it if this weren't imported before entity classes load.
 
 - [ ] **Step 7: Write `.gitignore`**
 
@@ -345,16 +350,26 @@ git commit -m "chore: scaffold package tooling"
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { SUBSCRIPTION_STORE, NOTIFICATION_LOG_STORE } from '../index';
+import {
+  SUBSCRIPTION_STORE,
+  NOTIFICATION_LOG_STORE,
+  NOTIFICATION_AUTHORIZER,
+  NOTIFICATION_WEBHOOK_VERIFIER,
+} from '../index';
+
+const TOKENS = [SUBSCRIPTION_STORE, NOTIFICATION_LOG_STORE, NOTIFICATION_AUTHORIZER, NOTIFICATION_WEBHOOK_VERIFIER];
 
 describe('DI tokens', () => {
   it('are unique symbols', () => {
-    expect(typeof SUBSCRIPTION_STORE).toBe('symbol');
-    expect(typeof NOTIFICATION_LOG_STORE).toBe('symbol');
-    expect(SUBSCRIPTION_STORE).not.toBe(NOTIFICATION_LOG_STORE);
+    for (const token of TOKENS) {
+      expect(typeof token).toBe('symbol');
+    }
+    expect(new Set(TOKENS).size).toBe(TOKENS.length);
   });
 });
 ```
+
+**Note:** `NOTIFICATION_WEBHOOK_VERIFIER` was added retroactively during Task 9 (see that task's section) for the same reason `NOTIFICATION_AUTHORIZER` was added during Task 8 — a required, injectable security hook, added here for consistency with the other shared tokens.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -368,6 +383,8 @@ Expected: FAIL — `SUBSCRIPTION_STORE` not exported.
 ```ts
 export const SUBSCRIPTION_STORE = Symbol('SUBSCRIPTION_STORE');
 export const NOTIFICATION_LOG_STORE = Symbol('NOTIFICATION_LOG_STORE');
+export const NOTIFICATION_AUTHORIZER = Symbol('NOTIFICATION_AUTHORIZER');
+export const NOTIFICATION_WEBHOOK_VERIFIER = Symbol('NOTIFICATION_WEBHOOK_VERIFIER');
 
 export interface PushPayload {
   title: string;
@@ -419,7 +436,37 @@ export interface NotificationLogStore {
   findUnreadByUserId(userId: string): Promise<NotificationRecord[]>;
   markAsRead(id: string): Promise<void>;
 }
+
+/**
+ * Authorizes access to notification data. `request` is the raw HTTP
+ * request object (typed `unknown` to stay HTTP-adapter-agnostic — cast it
+ * to your framework's request type, e.g. Express's `Request`, to read
+ * whatever identity your auth middleware attached). This package has no
+ * opinion on auth strategy; providing a `NOTIFICATION_AUTHORIZER` is
+ * required to use `NotificationController` — there is no default
+ * implementation, so a consumer cannot wire the controller without
+ * deciding how access is checked.
+ */
+export interface NotificationAuthorizer {
+  authorizeUserAccess(request: unknown, userId: string): boolean | Promise<boolean>;
+  authorizeNotificationAccess(request: unknown, notificationId: string): boolean | Promise<boolean>;
+}
+
+/**
+ * Verifies an inbound delivery-report webhook actually came from the
+ * configured aggregator (OneSignal, Airship, etc.) — e.g. checking an
+ * HMAC signature header against a shared secret. `request` is typed
+ * `unknown` for the same host-agnostic reason as `NotificationAuthorizer`.
+ * Required to use `NotificationWebhookController` — without it, anyone
+ * who can reach the endpoint could fabricate a "failed" delivery report
+ * and prune an arbitrary user's push subscription.
+ */
+export interface NotificationWebhookVerifier {
+  verify(request: unknown): boolean | Promise<boolean>;
+}
 ```
+
+**Added after Task 8:** `NOTIFICATION_AUTHORIZER`/`NotificationAuthorizer` were not part of this task's original scope — they were added retroactively (see Task 8's section) after a security review found `NotificationController` had no ownership check on its route params. A required, injectable authorizer (same "consumer supplies the implementation, fails closed without one" idiom as `SubscriptionStore`) was the fix, so it lives here alongside the other shared interfaces.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -450,7 +497,7 @@ git commit -m "feat: add shared push notification types and DI tokens"
 `src/server/__tests__/webpush.provider.spec.ts`:
 
 ```ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 const sendNotificationMock = vi.fn();
 vi.mock('web-push', () => ({
@@ -471,10 +518,9 @@ const target: PushTarget = {
 
 const config = { vapidPublicKey: 'pub', vapidPrivateKey: 'priv', subject: 'mailto:a@b.com' };
 
-beforeEach(() => sendNotificationMock.mockReset());
-
 describe('sendWebPush', () => {
   it('returns success on 201/200 response', async () => {
+    sendNotificationMock.mockReset();
     sendNotificationMock.mockResolvedValue({ statusCode: 201 });
     const result = await sendWebPush(target, { title: 't', body: 'b' }, config);
     expect(result.success).toBe(true);
@@ -482,7 +528,8 @@ describe('sendWebPush', () => {
   });
 
   it('flags dead token on 410 Gone', async () => {
-    sendNotificationMock.mockRejectedValue({ statusCode: 410, body: 'gone' });
+    sendNotificationMock.mockReset();
+    sendNotificationMock.mockRejectedValue(Object.assign(new Error('Gone'), { statusCode: 410, body: 'gone' }));
     const result = await sendWebPush(target, { title: 't', body: 'b' }, config);
     expect(result.success).toBe(false);
     expect(result.error?.isDeadToken).toBe(true);
@@ -490,20 +537,52 @@ describe('sendWebPush', () => {
   });
 
   it('flags dead token on 404 Not Found', async () => {
-    sendNotificationMock.mockRejectedValue({ statusCode: 404, body: 'not found' });
+    sendNotificationMock.mockReset();
+    sendNotificationMock.mockRejectedValue(Object.assign(new Error('Not Found'), { statusCode: 404, body: 'not found' }));
     const result = await sendWebPush(target, { title: 't', body: 'b' }, config);
     expect(result.error?.isDeadToken).toBe(true);
   });
 
   it('returns non-fatal error on other failures', async () => {
-    sendNotificationMock.mockRejectedValue({ statusCode: 500, body: 'server error' });
+    sendNotificationMock.mockReset();
+    sendNotificationMock.mockRejectedValue(Object.assign(new Error('Server Error'), { statusCode: 500, body: 'server error' }));
     const result = await sendWebPush(target, { title: 't', body: 'b' }, config);
     expect(result.success).toBe(false);
     expect(result.error?.isDeadToken).toBe(false);
     expect(result.error?.code).toBe('500');
   });
+
+  it('rejects non-https endpoints without attempting to send', async () => {
+    sendNotificationMock.mockReset();
+    const httpTarget: PushTarget = {
+      type: 'webpush',
+      userId: 'user-1',
+      subscription: { endpoint: 'http://push.example/abc', keys: { p256dh: 'p', auth: 'a' } },
+    };
+    const result = await sendWebPush(httpTarget, { title: 't', body: 'b' }, config);
+    expect(result.success).toBe(false);
+    expect(result.error?.code).toBe('invalid-endpoint');
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects endpoints pointing at private or loopback hosts', async () => {
+    sendNotificationMock.mockReset();
+    const privateTarget: PushTarget = {
+      type: 'webpush',
+      userId: 'user-1',
+      subscription: { endpoint: 'https://127.0.0.1/abc', keys: { p256dh: 'p', auth: 'a' } },
+    };
+    const result = await sendWebPush(privateTarget, { title: 't', body: 'b' }, config);
+    expect(result.success).toBe(false);
+    expect(result.error?.code).toBe('invalid-endpoint');
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+  });
 });
 ```
+
+**Note on rejection mocks and reset timing:** two non-obvious fixes here versus a naive test:
+1. `sendNotificationMock.mockReset()` is called as the FIRST LINE of each `it`, not in a `beforeEach`. On this project's `vitest@4.1.11`, calling `.mockReset()`/`.mockClear()` inside a `beforeEach` hook corrupts that mock's rejection handling for the test that follows — a `mockRejectedValue()` set later in the same test then gets misreported as a test failure even though it's caught in `try/catch` and every assertion passes. Verified by isolated repro: identical test passes when the reset is inline, fails when the exact same reset is moved into `beforeEach`. This is a hook-timing defect in this vitest version, not a matter of Error-vs-plain-object rejection values.
+2. Every `mockRejectedValue` uses `Object.assign(new Error(...), {...})` rather than a plain object literal. Not required to dodge the bug above (that's fixed by point 1 alone) — kept because it's the more faithful mock: the real `web-push` package rejects with `WebPushError`, an `Error` subclass, not a plain object.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -525,11 +604,47 @@ export interface WebPushConfig {
 
 const DEAD_TOKEN_STATUS_CODES = new Set([404, 410]);
 
+const PRIVATE_HOSTNAME_PATTERNS = [
+  /^localhost$/i,
+  /^127\./,
+  /^10\./,
+  /^172\.(1[6-9]|2\d|3[0-1])\./,
+  /^192\.168\./,
+  /^169\.254\./,
+  /^0\.0\.0\.0$/,
+  /^\[?::1\]?$/,
+  /^f[cd][0-9a-f]{2}:/i,
+  /^fe80:/i,
+];
+
+function isDisallowedEndpoint(endpoint: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return true;
+  }
+  if (url.protocol !== 'https:') return true;
+  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+  return PRIVATE_HOSTNAME_PATTERNS.some((pattern) => pattern.test(hostname));
+}
+
 export async function sendWebPush(
   target: PushTarget & { type: 'webpush' },
   payload: PushPayload,
   config: WebPushConfig,
 ): Promise<SendResult> {
+  // target.subscription.endpoint is client-submitted and stored by the consumer app —
+  // reject anything that isn't an https push-service URL before handing it to web-push,
+  // so this provider can't be used as an SSRF proxy against internal/loopback hosts.
+  if (isDisallowedEndpoint(target.subscription.endpoint)) {
+    return {
+      target,
+      success: false,
+      error: { code: 'invalid-endpoint', message: 'Web Push endpoint is not an allowed https destination', isDeadToken: false },
+    };
+  }
+
   const webpush = (await import('web-push')).default;
   webpush.setVapidDetails(config.subject, config.vapidPublicKey, config.vapidPrivateKey);
 
@@ -538,13 +653,14 @@ export async function sendWebPush(
     return { target, success: true };
   } catch (err) {
     const statusCode = (err as { statusCode?: number }).statusCode ?? 0;
-    const message = (err as { body?: string }).body ?? 'Web Push send failed';
     return {
       target,
       success: false,
       error: {
         code: String(statusCode),
-        message,
+        // Don't propagate the raw upstream response body — it may echo back
+        // content from a host we didn't intend to contact.
+        message: 'Web Push send failed',
         isDeadToken: DEAD_TOKEN_STATUS_CODES.has(statusCode),
       },
     };
@@ -581,7 +697,7 @@ git commit -m "feat: add Web Push provider with dead-token detection"
 `src/server/__tests__/fcm.provider.spec.ts`:
 
 ```ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 const sendMock = vi.fn();
 const getMessagingMock = vi.fn(() => ({ send: sendMock }));
@@ -603,38 +719,45 @@ import type { PushTarget } from '../../index';
 const target: PushTarget = { type: 'fcm', userId: 'user-1', token: 'device-token-abc' };
 const config = { serviceAccount: { projectId: 'p' } };
 
-beforeEach(() => {
-  sendMock.mockReset();
-  initializeAppMock.mockClear();
-});
-
 describe('sendFcm', () => {
   it('returns success when send resolves', async () => {
+    sendMock.mockReset();
+    initializeAppMock.mockClear();
     sendMock.mockResolvedValue('message-id-123');
     const result = await sendFcm(target, { title: 't', body: 'b' }, config);
     expect(result.success).toBe(true);
   });
 
   it('flags dead token on registration-token-not-registered', async () => {
-    sendMock.mockRejectedValue({ code: 'messaging/registration-token-not-registered' });
+    sendMock.mockReset();
+    initializeAppMock.mockClear();
+    sendMock.mockRejectedValue(
+      Object.assign(new Error('not registered'), { code: 'messaging/registration-token-not-registered' }),
+    );
     const result = await sendFcm(target, { title: 't', body: 'b' }, config);
     expect(result.error?.isDeadToken).toBe(true);
     expect(result.error?.code).toBe('messaging/registration-token-not-registered');
   });
 
   it('flags dead token on InvalidRegistration', async () => {
-    sendMock.mockRejectedValue({ code: 'InvalidRegistration' });
+    sendMock.mockReset();
+    initializeAppMock.mockClear();
+    sendMock.mockRejectedValue(Object.assign(new Error('invalid'), { code: 'InvalidRegistration' }));
     const result = await sendFcm(target, { title: 't', body: 'b' }, config);
     expect(result.error?.isDeadToken).toBe(true);
   });
 
   it('returns non-fatal error for other codes', async () => {
-    sendMock.mockRejectedValue({ code: 'messaging/internal-error', message: 'boom' });
+    sendMock.mockReset();
+    initializeAppMock.mockClear();
+    sendMock.mockRejectedValue(Object.assign(new Error('boom'), { code: 'messaging/internal-error', message: 'boom' }));
     const result = await sendFcm(target, { title: 't', body: 'b' }, config);
     expect(result.error?.isDeadToken).toBe(false);
   });
 });
 ```
+
+**Note on rejection mocks and reset timing:** same two fixes as Task 3's provider test. (1) `.mockReset()`/`.mockClear()` are called as the first lines of each `it`, never in a `beforeEach` — on this project's `vitest@4.1.11`, resetting a mock inside `beforeEach` corrupts that mock's rejection handling for the test that follows, misreporting a caught, assertion-passing `mockRejectedValue` as a failure (verified by isolated repro, unrelated to vi.mock/dynamic-import/Error-vs-plain-object). (2) rejections use `Object.assign(new Error(...), {...})` because real `firebase-admin` messaging errors are `Error` instances, not plain objects.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -671,9 +794,8 @@ export async function sendFcm(
   payload: PushPayload,
   config: FcmConfig,
 ): Promise<SendResult> {
-  const messaging = await getMessaging(config);
-
   try {
+    const messaging = await getMessaging(config);
     await messaging.send({
       token: target.token,
       notification: { title: payload.title, body: payload.body },
@@ -824,26 +946,34 @@ export async function sendApns(
   payload: PushPayload,
   config: ApnsConfig,
 ): Promise<SendResult> {
-  const { apn, provider } = await getProvider(config);
+  try {
+    const { apn, provider } = await getProvider(config);
 
-  const notification = new apn.Notification();
-  notification.alert = { title: payload.title, body: payload.body };
-  notification.topic = config.bundleId;
-  notification.payload = payload.data ?? {};
+    const notification = new apn.Notification();
+    notification.alert = { title: payload.title, body: payload.body };
+    notification.topic = config.bundleId;
+    notification.payload = payload.data ?? {};
 
-  const response = await provider.send(notification, target.token);
-  const failure = response.failed[0];
+    const response = await provider.send(notification, target.token);
+    const failure = response.failed[0];
 
-  if (!failure) {
-    return { target, success: true };
+    if (!failure) {
+      return { target, success: true };
+    }
+
+    const reason = failure.response?.reason ?? 'Unknown';
+    return {
+      target,
+      success: false,
+      error: { code: reason, message: `APNs send failed: ${reason}`, isDeadToken: DEAD_TOKEN_REASONS.has(reason) },
+    };
+  } catch (err) {
+    return {
+      target,
+      success: false,
+      error: { code: 'apns-error', message: (err as Error).message ?? 'APNs send failed', isDeadToken: false },
+    };
   }
-
-  const reason = failure.response?.reason ?? 'Unknown';
-  return {
-    target,
-    success: false,
-    error: { code: reason, message: `APNs send failed: ${reason}`, isDeadToken: DEAD_TOKEN_REASONS.has(reason) },
-  };
 }
 ```
 
@@ -1097,12 +1227,22 @@ git commit -m "feat: add PushService with provider dispatch and auto-prune"
 
 ```ts
 import { describe, it, expect } from 'vitest';
+import { Global, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PushNotificationModule, PushNotificationModuleConfig } from '../push-notification.module';
 import { PushService } from '../push.service';
 import { SUBSCRIPTION_STORE } from '../../index';
 
 const dummyStore = { save: async () => {}, findByUserId: async () => [], delete: async () => {}, findAll: async () => [] };
+
+const EXTRA_CONFIG = Symbol('EXTRA_CONFIG');
+
+@Global()
+@Module({
+  providers: [{ provide: EXTRA_CONFIG, useValue: { serviceAccount: { projectId: 'injected' } } }],
+  exports: [EXTRA_CONFIG],
+})
+class ExtraConfigModule {}
 
 describe('PushNotificationModule', () => {
   it('forRoot registers PushService with given config', async () => {
@@ -1130,6 +1270,20 @@ describe('PushNotificationModule', () => {
     expect(moduleRef.get(PushService)).toBeInstanceOf(PushService);
   });
 
+  it('forRootAsync injects a real dependency into the factory', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        ExtraConfigModule,
+        PushNotificationModule.forRootAsync({
+          useFactory: (extra: { serviceAccount: object }) => ({ fcm: extra, subscriptionStore: dummyStore }),
+          inject: [EXTRA_CONFIG],
+        }),
+      ],
+    }).compile();
+
+    expect(moduleRef.get(PushService)).toBeInstanceOf(PushService);
+  });
+
   it('throws at bootstrap when webpush config is missing required fields', async () => {
     const badConfig = { webpush: { vapidPublicKey: 'a' } as never, subscriptionStore: dummyStore };
     await expect(
@@ -1149,7 +1303,7 @@ Expected: FAIL — module `../push-notification.module` not found.
 `src/server/push-notification.module.ts`:
 
 ```ts
-import { DynamicModule, Module, Provider } from '@nestjs/common';
+import { DynamicModule, InjectionToken, Module, OptionalFactoryDependency, Provider } from '@nestjs/common';
 import { PushService, PushServiceConfig } from './push.service';
 import { SUBSCRIPTION_STORE, SubscriptionStore } from '../index';
 
@@ -1203,8 +1357,8 @@ export class PushNotificationModule {
   }
 
   static forRootAsync(options: {
-    useFactory: (...args: never[]) => PushNotificationModuleConfig | Promise<PushNotificationModuleConfig>;
-    inject?: never[];
+    useFactory: (...args: any[]) => PushNotificationModuleConfig | Promise<PushNotificationModuleConfig>;
+    inject?: (InjectionToken | OptionalFactoryDependency)[];
   }): DynamicModule {
     return {
       module: PushNotificationModule,
@@ -1240,8 +1394,10 @@ git commit -m "feat: add PushNotificationModule with forRoot/forRootAsync"
 - Test: `src/server/__tests__/notification.controller.spec.ts`
 
 **Interfaces:**
-- Consumes: `NotificationLogStore`, `NOTIFICATION_LOG_STORE` from `../index`.
-- Produces: `NotificationController` (Nest controller, `@Inject(NOTIFICATION_LOG_STORE)`) — consumed by `server/index.ts` barrel (Task 14).
+- Consumes: `NotificationLogStore`, `NOTIFICATION_LOG_STORE`, `NotificationAuthorizer`, `NOTIFICATION_AUTHORIZER` from `../index`.
+- Produces: `NotificationController` (Nest controller, `@Inject(NOTIFICATION_LOG_STORE)` + `@Inject(NOTIFICATION_AUTHORIZER)`) — consumed by `server/index.ts` barrel (Task 14).
+
+**Revision history:** the version below is the corrected, final form. A first pass shipped with no authorization at all (just `@Inject(NOTIFICATION_LOG_STORE)`, no ownership check on `:userId`/`:id`) and was caught by an automated security review as a HIGH-severity IDOR — any caller could read or mark-as-read any user's notifications. A doc-comment-only mitigation was tried first and rejected on re-review as inadequate (advisory-only, fails open). The fix below makes `NOTIFICATION_AUTHORIZER` a required constructor dependency — Nest fails to bootstrap without one — mirroring the same "consumer supplies the implementation, fails closed" idiom already used for `SubscriptionStore`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1249,11 +1405,19 @@ git commit -m "feat: add PushNotificationModule with forRoot/forRootAsync"
 
 ```ts
 import { describe, it, expect, vi } from 'vitest';
+import { ForbiddenException } from '@nestjs/common';
 import { NotificationController } from '../notification.controller';
-import type { NotificationLogStore, NotificationRecord } from '../../index';
+import type { NotificationAuthorizer, NotificationLogStore, NotificationRecord } from '../../index';
 
 function makeStore(): NotificationLogStore {
   return { save: vi.fn(), findUnreadByUserId: vi.fn(), markAsRead: vi.fn() };
+}
+
+function makeAuthorizer(allow = true): NotificationAuthorizer {
+  return {
+    authorizeUserAccess: vi.fn().mockResolvedValue(allow),
+    authorizeNotificationAccess: vi.fn().mockResolvedValue(allow),
+  };
 }
 
 const record: NotificationRecord = {
@@ -1265,26 +1429,50 @@ const record: NotificationRecord = {
   createdAt: new Date(),
 };
 
+const request = { headers: {} };
+
 describe('NotificationController', () => {
-  it('getNotifications returns unread list from store', async () => {
+  it('getNotifications returns unread list from store when authorized', async () => {
     const store = makeStore();
     (store.findUnreadByUserId as ReturnType<typeof vi.fn>).mockResolvedValue([record]);
-    const controller = new NotificationController(store);
+    const authorizer = makeAuthorizer(true);
+    const controller = new NotificationController(store, authorizer);
 
-    const result = await controller.getNotifications('user-1');
+    const result = await controller.getNotifications('user-1', request);
 
+    expect(authorizer.authorizeUserAccess).toHaveBeenCalledWith(request, 'user-1');
     expect(store.findUnreadByUserId).toHaveBeenCalledWith('user-1');
     expect(result).toEqual([record]);
   });
 
-  it('markAsRead delegates to store and returns success', async () => {
+  it('getNotifications throws ForbiddenException when not authorized', async () => {
     const store = makeStore();
-    const controller = new NotificationController(store);
+    const authorizer = makeAuthorizer(false);
+    const controller = new NotificationController(store, authorizer);
 
-    const result = await controller.markAsRead('n-1');
+    await expect(controller.getNotifications('user-1', request)).rejects.toThrow(ForbiddenException);
+    expect(store.findUnreadByUserId).not.toHaveBeenCalled();
+  });
 
+  it('markAsRead delegates to store and returns success when authorized', async () => {
+    const store = makeStore();
+    const authorizer = makeAuthorizer(true);
+    const controller = new NotificationController(store, authorizer);
+
+    const result = await controller.markAsRead('n-1', request);
+
+    expect(authorizer.authorizeNotificationAccess).toHaveBeenCalledWith(request, 'n-1');
     expect(store.markAsRead).toHaveBeenCalledWith('n-1');
     expect(result).toEqual({ success: true });
+  });
+
+  it('markAsRead throws ForbiddenException when not authorized', async () => {
+    const store = makeStore();
+    const authorizer = makeAuthorizer(false);
+    const controller = new NotificationController(store, authorizer);
+
+    await expect(controller.markAsRead('n-1', request)).rejects.toThrow(ForbiddenException);
+    expect(store.markAsRead).not.toHaveBeenCalled();
   });
 });
 ```
@@ -1296,23 +1484,39 @@ Expected: FAIL — module `../notification.controller` not found.
 
 - [ ] **Step 3: Write implementation**
 
-`src/server/notification.controller.ts`:
+`src/server/notification.controller.ts`. Note the split import: `NotificationLogStore`/`NotificationAuthorizer` must be `type`-only imports here — with this project's `isolatedModules` + `emitDecoratorMetadata` both on, TypeScript errors (`TS1272`) if a type used in a `@Inject`-decorated constructor parameter isn't explicitly imported as a type. `NOTIFICATION_LOG_STORE`/`NOTIFICATION_AUTHORIZER` stay normal value imports since they're used as the decorators' arguments, not just types.
 
 ```ts
-import { Controller, Get, Param, Patch, Inject } from '@nestjs/common';
-import { NOTIFICATION_LOG_STORE, NotificationLogStore } from '../index';
+import { Controller, ForbiddenException, Get, Inject, Param, Patch, Req } from '@nestjs/common';
+import { NOTIFICATION_AUTHORIZER, NOTIFICATION_LOG_STORE } from '../index';
+import type { NotificationAuthorizer, NotificationLogStore } from '../index';
 
+/**
+ * Not auto-registered by PushNotificationModule — add it to your own
+ * module's `controllers` array to mount it, alongside a provider for
+ * `NOTIFICATION_AUTHORIZER` (required — Nest fails to bootstrap without
+ * one, by design, so this controller cannot be wired up unguarded).
+ */
 @Controller('notifications')
 export class NotificationController {
-  constructor(@Inject(NOTIFICATION_LOG_STORE) private readonly store: NotificationLogStore) {}
+  constructor(
+    @Inject(NOTIFICATION_LOG_STORE) private readonly store: NotificationLogStore,
+    @Inject(NOTIFICATION_AUTHORIZER) private readonly authorizer: NotificationAuthorizer,
+  ) {}
 
   @Get(':userId')
-  async getNotifications(@Param('userId') userId: string) {
+  async getNotifications(@Param('userId') userId: string, @Req() request: unknown) {
+    if (!(await this.authorizer.authorizeUserAccess(request, userId))) {
+      throw new ForbiddenException();
+    }
     return this.store.findUnreadByUserId(userId);
   }
 
   @Patch(':id/read')
-  async markAsRead(@Param('id') id: string) {
+  async markAsRead(@Param('id') id: string, @Req() request: unknown) {
+    if (!(await this.authorizer.authorizeNotificationAccess(request, id))) {
+      throw new ForbiddenException();
+    }
     await this.store.markAsRead(id);
     return { success: true };
   }
@@ -1322,13 +1526,13 @@ export class NotificationController {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run src/server/__tests__/notification.controller.spec.ts`
-Expected: PASS
+Expected: PASS — 4/4 tests (2 authorized-path, 2 forbidden-path)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/server/notification.controller.ts src/server/__tests__/notification.controller.spec.ts
-git commit -m "feat: add NotificationController for unread list and mark-as-read"
+git commit -m "feat: add NotificationController with required authorization check"
 ```
 
 ---
@@ -1340,8 +1544,10 @@ git commit -m "feat: add NotificationController for unread list and mark-as-read
 - Test: `src/server/__tests__/notification-webhook.controller.spec.ts`
 
 **Interfaces:**
-- Consumes: `PushService` (Task 6) for `pruneTarget`.
+- Consumes: `PushService` (Task 6) for `pruneTarget`; `NotificationWebhookVerifier`, `NOTIFICATION_WEBHOOK_VERIFIER` from `../index`.
 - Produces: `NotificationWebhookController`, and a new `PushService.pruneTarget(userId, target)` public method (adds to the class from Task 6) — consumed by `server/index.ts` barrel (Task 14). Not auto-registered by `PushNotificationModule`; consumer imports it explicitly.
+
+**Security note (learned from Task 8):** this endpoint is unauthenticated by nature — it's meant to be called by an external aggregator, not a logged-in user, so there's no `userId`/session to check like Task 8's controller. But without ANY verification, anyone who can reach it could POST a fabricated `status: 'failed'` body and prune an arbitrary user's push subscription. `NotificationWebhookVerifier` is a required constructor dependency (same fail-closed idiom as `NotificationAuthorizer`) so this can't be wired up without the consumer deciding how to verify the caller (typically an HMAC signature check against their aggregator's shared secret).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1349,37 +1555,66 @@ git commit -m "feat: add NotificationController for unread list and mark-as-read
 
 ```ts
 import { describe, it, expect, vi } from 'vitest';
+import { ForbiddenException } from '@nestjs/common';
 import { NotificationWebhookController } from '../notification-webhook.controller';
 import { PushService } from '../push.service';
+import type { NotificationWebhookVerifier } from '../../index';
 
 function makeService() {
   return { pruneTarget: vi.fn() } as unknown as PushService;
 }
 
+function makeVerifier(allow = true): NotificationWebhookVerifier {
+  return { verify: vi.fn().mockResolvedValue(allow) };
+}
+
+const request = { headers: {} };
+
 describe('NotificationWebhookController', () => {
-  it('acknowledges receipt for a well-formed body', async () => {
+  it('acknowledges receipt for a well-formed, verified body', async () => {
     const service = makeService();
-    const controller = new NotificationWebhookController(service);
+    const verifier = makeVerifier(true);
+    const controller = new NotificationWebhookController(service, verifier);
 
-    const result = await controller.handleDeliveryReport({
-      event: 'delivery.ok',
-      userId: 'user-1',
-      target: { type: 'fcm', userId: 'user-1', token: 'tok-1' },
-      status: 'ok',
-    });
+    const result = await controller.handleDeliveryReport(
+      {
+        event: 'delivery.ok',
+        userId: 'user-1',
+        target: { type: 'fcm', userId: 'user-1', token: 'tok-1' },
+        status: 'ok',
+      },
+      request,
+    );
 
+    expect(verifier.verify).toHaveBeenCalledWith(request);
     expect(result).toEqual({ received: true });
     expect(service.pruneTarget).not.toHaveBeenCalled();
   });
 
-  it('prunes target when status is failed', async () => {
+  it('prunes target when status is failed and verified', async () => {
     const service = makeService();
-    const controller = new NotificationWebhookController(service);
+    const verifier = makeVerifier(true);
+    const controller = new NotificationWebhookController(service, verifier);
     const target = { type: 'fcm' as const, userId: 'user-1', token: 'tok-1' };
 
-    await controller.handleDeliveryReport({ event: 'delivery.failed', userId: 'user-1', target, status: 'failed' });
+    await controller.handleDeliveryReport(
+      { event: 'delivery.failed', userId: 'user-1', target, status: 'failed' },
+      request,
+    );
 
     expect(service.pruneTarget).toHaveBeenCalledWith('user-1', target);
+  });
+
+  it('throws ForbiddenException and never touches the service when verification fails', async () => {
+    const service = makeService();
+    const verifier = makeVerifier(false);
+    const controller = new NotificationWebhookController(service, verifier);
+    const target = { type: 'fcm' as const, userId: 'user-1', token: 'tok-1' };
+
+    await expect(
+      controller.handleDeliveryReport({ event: 'delivery.failed', userId: 'user-1', target, status: 'failed' }, request),
+    ).rejects.toThrow(ForbiddenException);
+    expect(service.pruneTarget).not.toHaveBeenCalled();
   });
 });
 ```
@@ -1401,10 +1636,13 @@ Modify `src/server/push.service.ts` — add this public method to the `PushServi
 
 - [ ] **Step 4: Write `notification-webhook.controller.ts`**
 
+Note the split import, same TS1272 reason as Task 8: `NotificationWebhookVerifier` is only ever used as a type, so it needs `import type`, while `NOTIFICATION_WEBHOOK_VERIFIER` stays a value import (it's the decorator's argument).
+
 ```ts
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, HttpCode, HttpStatus, Inject, Post, Req } from '@nestjs/common';
+import { NOTIFICATION_WEBHOOK_VERIFIER } from '../index';
+import type { PushTarget, NotificationWebhookVerifier } from '../index';
 import { PushService } from './push.service';
-import type { PushTarget } from '../index';
 
 interface DeliveryReportBody {
   event: string;
@@ -1418,14 +1656,24 @@ interface DeliveryReportBody {
  * (OneSignal, Airship, etc.) is configured to POST here. The three
  * built-in providers (web-push/FCM/APNs) never call this endpoint —
  * they report failures synchronously in the send response instead.
+ *
+ * Requires a `NOTIFICATION_WEBHOOK_VERIFIER` provider (required — Nest
+ * fails to bootstrap without one) to confirm the request actually came
+ * from your aggregator before acting on it.
  */
 @Controller('webhooks/notifications')
 export class NotificationWebhookController {
-  constructor(private readonly pushService: PushService) {}
+  constructor(
+    private readonly pushService: PushService,
+    @Inject(NOTIFICATION_WEBHOOK_VERIFIER) private readonly verifier: NotificationWebhookVerifier,
+  ) {}
 
   @Post('delivery-report')
   @HttpCode(HttpStatus.OK)
-  async handleDeliveryReport(@Body() body: DeliveryReportBody) {
+  async handleDeliveryReport(@Body() body: DeliveryReportBody, @Req() request: unknown) {
+    if (!(await this.verifier.verify(request))) {
+      throw new ForbiddenException();
+    }
     if (body.status === 'failed') {
       await this.pushService.pruneTarget(body.userId, body.target);
     }
@@ -1437,13 +1685,13 @@ export class NotificationWebhookController {
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `npx vitest run src/server/__tests__/notification-webhook.controller.spec.ts src/server/__tests__/push.service.spec.ts`
-Expected: PASS (both files — confirms the `pruneTarget` addition didn't break Task 6's tests)
+Expected: PASS — 3/3 in the new file (both files together confirm the `pruneTarget` addition didn't break Task 6's tests)
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/server/notification-webhook.controller.ts src/server/__tests__/notification-webhook.controller.spec.ts src/server/push.service.ts
-git commit -m "feat: add opt-in NotificationWebhookController for aggregator delivery reports"
+git commit -m "feat: add opt-in NotificationWebhookController with required signature verification"
 ```
 
 ---
@@ -1566,6 +1814,8 @@ Expected: FAIL — modules not found.
 
 - [ ] **Step 3: Write the entities**
 
+Every field uses a definite-assignment assertion (`!`) — under this project's `strict: true` tsconfig (`strictPropertyInitialization`), a field with no initializer trips `TS2564` because TypeScript can't see that the TypeORM decorator populates it at runtime. This is the standard pattern for TypeORM entities under strict TypeScript.
+
 `src/typeorm/push-subscription.entity.ts`:
 
 ```ts
@@ -1575,16 +1825,16 @@ import type { PushTarget } from '../index';
 @Entity()
 export class PushSubscriptionEntity {
   @PrimaryGeneratedColumn('uuid')
-  id: string;
+  id!: string;
 
   @Column()
-  userId: string;
+  userId!: string;
 
   @Column({ type: 'simple-json' })
-  target: PushTarget;
+  target!: PushTarget;
 
   @CreateDateColumn()
-  createdAt: Date;
+  createdAt!: Date;
 }
 ```
 
@@ -1596,22 +1846,22 @@ import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn } from 'typeor
 @Entity()
 export class NotificationEntity {
   @PrimaryGeneratedColumn('uuid')
-  id: string;
+  id!: string;
 
   @Column()
-  userId: string;
+  userId!: string;
 
   @Column()
-  title: string;
+  title!: string;
 
   @Column()
-  body: string;
+  body!: string;
 
   @Column({ default: false })
-  isRead: boolean;
+  isRead!: boolean;
 
   @CreateDateColumn()
-  createdAt: Date;
+  createdAt!: Date;
 }
 ```
 
@@ -1649,18 +1899,30 @@ export class TypeOrmSubscriptionStore implements SubscriptionStore {
 }
 ```
 
-`src/typeorm/typeorm-notification-log-store.ts`:
+`src/typeorm/typeorm-notification-log-store.ts`. `save()` explicitly stamps `createdAt` in JS rather than relying on `@CreateDateColumn`'s DB-side default — on SQLite, TypeORM inlines that default (`datetime('now')`) literally into the INSERT statement (SQLite has no DEFAULT-expression support in INSERT), and SQLite's `datetime('now')` only has whole-second resolution. Two saves within the same second get identical `createdAt`, and ties resolve to insertion order rather than reverse-insertion order — breaking "newest first" ordering. A plain `new Date()` per call isn't sufficient either (two calls can land in the same millisecond); a monotonically-bumped timestamp guarantees strictly increasing values regardless of clock/DB resolution:
 
 ```ts
 import type { Repository } from 'typeorm';
 import type { NotificationLogStore, NotificationRecord } from '../index';
 import { NotificationEntity } from './notification.entity';
 
+/**
+ * `save()`'s createdAt ordering guarantee is per store-instance only —
+ * two separate instances (e.g. across a process restart) don't coordinate,
+ * so "newest first" is only strictly guaranteed for saves issued through
+ * the same instance.
+ */
 export class TypeOrmNotificationLogStore implements NotificationLogStore {
+  private lastTimestampMs = 0;
+
   constructor(private readonly repo: Repository<NotificationEntity>) {}
 
   async save(record: { userId: string; title: string; body: string }): Promise<NotificationRecord> {
-    const saved = await this.repo.save(this.repo.create(record));
+    const now = Date.now();
+    this.lastTimestampMs = now > this.lastTimestampMs ? now : this.lastTimestampMs + 1;
+    const saved = await this.repo.save(
+      this.repo.create({ ...record, createdAt: new Date(this.lastTimestampMs) }),
+    );
     return saved;
   }
 
@@ -1788,6 +2050,8 @@ git commit -m "feat: add usePushPermission hook"
 **Interfaces:**
 - Produces: `usePushSubscription({ vapidPublicKey, swPath }): { subscription: PushSubscription | null; status: 'idle'|'subscribing'|'subscribed'|'error'; subscribe(): Promise<void>; unsubscribe(): Promise<void> }` — consumed by `react/index.ts` barrel (Task 14).
 
+**Revision history:** the version below is the corrected, final form. A first pass set `status: 'error'` when `navigator.serviceWorker` was unavailable (contradicting the design's "SSR-safe: no-op, stays idle" contract) and had `unsubscribe()` only clear React state without calling the real `subscription.unsubscribe()` — leaving the subscription live with the push service even though the hook reported `idle`/`null`. Caught on task review; both are plan-mandated bugs (not implementer deviation), fixed below.
+
 - [ ] **Step 1: Write the failing test**
 
 `src/react/__tests__/use-push-subscription.test.tsx`:
@@ -1797,9 +2061,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { usePushSubscription } from '../use-push-subscription';
 
-const mockSubscription = { endpoint: 'https://push.example/1' };
-const subscribeMock = vi.fn().mockResolvedValue(mockSubscription);
 const unsubscribeMock = vi.fn().mockResolvedValue(undefined);
+const mockSubscription = { endpoint: 'https://push.example/1', unsubscribe: unsubscribeMock };
+const subscribeMock = vi.fn().mockResolvedValue(mockSubscription);
 const getSubscriptionMock = vi.fn().mockResolvedValue(null);
 
 beforeEach(() => {
@@ -1834,7 +2098,7 @@ describe('usePushSubscription', () => {
     expect(result.current.subscription).toEqual(mockSubscription);
   });
 
-  it('unsubscribe() clears subscription state', async () => {
+  it('unsubscribe() calls the real subscription.unsubscribe() and clears state', async () => {
     const { result } = renderHook(() => usePushSubscription({ vapidPublicKey: 'pub', swPath: '/sw.js' }));
     await act(async () => {
       await result.current.subscribe();
@@ -1844,6 +2108,19 @@ describe('usePushSubscription', () => {
       await result.current.unsubscribe();
     });
 
+    expect(unsubscribeMock).toHaveBeenCalledOnce();
+    expect(result.current.subscription).toBeNull();
+    expect(result.current.status).toBe('idle');
+  });
+
+  it('unsubscribe() is a no-op when there is no active subscription', async () => {
+    const { result } = renderHook(() => usePushSubscription({ vapidPublicKey: 'pub', swPath: '/sw.js' }));
+
+    await act(async () => {
+      await result.current.unsubscribe();
+    });
+
+    expect(unsubscribeMock).not.toHaveBeenCalled();
     expect(result.current.subscription).toBeNull();
     expect(result.current.status).toBe('idle');
   });
@@ -1858,6 +2135,18 @@ describe('usePushSubscription', () => {
 
     expect(result.current.status).toBe('error');
   });
+
+  it('subscribe() stays idle (no-op) when navigator.serviceWorker is unavailable', async () => {
+    vi.stubGlobal('navigator', {});
+    const { result } = renderHook(() => usePushSubscription({ vapidPublicKey: 'pub', swPath: '/sw.js' }));
+
+    await act(async () => {
+      await result.current.subscribe();
+    });
+
+    expect(result.current.status).toBe('idle');
+    expect(subscribeMock).not.toHaveBeenCalled();
+  });
 });
 ```
 
@@ -1868,7 +2157,7 @@ Expected: FAIL — module not found.
 
 - [ ] **Step 3: Write implementation**
 
-`src/react/use-push-subscription.ts`:
+`src/react/use-push-subscription.ts`. Two notes: (1) `as BufferSource` on `applicationServerKey` — the DOM lib's typed-array generics (`Uint8Array<ArrayBufferLike>` vs. the expected `ArrayBufferView<ArrayBuffer>`) make `Uint8Array.from(...)`'s return type incompatible without it, even though the runtime value is correct (a real `tsc --noEmit` failure, `TS2322`, not caught by `vitest` alone since it doesn't type-check). (2) the SSR guard just `return`s (leaving `status` at whatever it already was, i.e. `idle` on first call) rather than setting `'error'` — per the design's "no-op" contract, an unsupported environment isn't a *failure*, it's an absence of the feature.
 
 ```ts
 import { useCallback, useState } from 'react';
@@ -1886,7 +2175,6 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
 
   const subscribe = useCallback(async () => {
     if (typeof navigator === 'undefined' || !navigator.serviceWorker) {
-      setStatus('error');
       return;
     }
     setStatus('subscribing');
@@ -1894,9 +2182,9 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
       const registration = await navigator.serviceWorker.register(opts.swPath);
       const sub = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(opts.vapidPublicKey),
+        applicationServerKey: urlBase64ToUint8Array(opts.vapidPublicKey) as BufferSource,
       });
-      setSubscription(sub as unknown as PushSubscription);
+      setSubscription(sub);
       setStatus('subscribed');
     } catch {
       setStatus('error');
@@ -1904,9 +2192,12 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
   }, [opts.swPath, opts.vapidPublicKey]);
 
   const unsubscribe = useCallback(async () => {
+    if (subscription) {
+      await subscription.unsubscribe();
+    }
     setSubscription(null);
     setStatus('idle');
-  }, []);
+  }, [subscription]);
 
   return { subscription, status, subscribe, unsubscribe };
 }
@@ -1915,7 +2206,7 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run src/react/__tests__/use-push-subscription.test.tsx`
-Expected: PASS
+Expected: PASS — 6/6 tests
 
 - [ ] **Step 5: Commit**
 
@@ -1952,11 +2243,6 @@ vi.mock('firebase/messaging', () => ({ getMessaging: getMessagingMock, getToken:
 
 import { usePushSubscriptionFcm } from '../use-push-subscription-fcm';
 
-beforeEach(() => {
-  getTokenMock.mockReset();
-  initializeAppMock.mockClear();
-});
-
 describe('usePushSubscriptionFcm', () => {
   it('starts idle with no token', () => {
     const { result } = renderHook(() =>
@@ -1967,6 +2253,8 @@ describe('usePushSubscriptionFcm', () => {
   });
 
   it('subscribe() initializes firebase and stores the token', async () => {
+    getTokenMock.mockReset();
+    initializeAppMock.mockClear();
     getTokenMock.mockResolvedValue('fcm-token-abc');
     const { result } = renderHook(() =>
       usePushSubscriptionFcm({ firebaseConfig: { projectId: 'p' }, vapidKey: 'vk' }),
@@ -1981,6 +2269,8 @@ describe('usePushSubscriptionFcm', () => {
   });
 
   it('sets status to error when getToken throws', async () => {
+    getTokenMock.mockReset();
+    initializeAppMock.mockClear();
     getTokenMock.mockRejectedValue(new Error('permission denied'));
     const { result } = renderHook(() =>
       usePushSubscriptionFcm({ firebaseConfig: { projectId: 'p' }, vapidKey: 'vk' }),
@@ -1992,8 +2282,31 @@ describe('usePushSubscriptionFcm', () => {
 
     expect(result.current.status).toBe('error');
   });
+
+  it('subscribe() stays idle (no-op) when window is unavailable', async () => {
+    getTokenMock.mockReset();
+    initializeAppMock.mockClear();
+    const originalWindow = global.window;
+    const { result } = renderHook(() =>
+      usePushSubscriptionFcm({ firebaseConfig: { projectId: 'p' }, vapidKey: 'vk' }),
+    );
+
+    // @ts-expect-error -- simulating an SSR environment for this one test
+    delete global.window;
+
+    await act(async () => {
+      await result.current.subscribe();
+    });
+
+    expect(result.current.status).toBe('idle');
+    expect(initializeAppMock).not.toHaveBeenCalled();
+
+    global.window = originalWindow;
+  });
 });
 ```
+
+**Note on reset timing:** same fix as Tasks 3/4 — `.mockReset()`/`.mockClear()` run as the first lines of each `it`, never in a `beforeEach`. On this project's `vitest@4.1.11`, resetting a mock inside `beforeEach` corrupts that mock's rejection handling for the test that follows when a persistent `.mockRejectedValue()` is set later in the same test (verified by isolated repro during Task 3; `.mockRejectedValueOnce()` and `.mockResolvedValue()` are both unaffected).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -2002,7 +2315,7 @@ Expected: FAIL — module not found.
 
 - [ ] **Step 3: Write implementation**
 
-`src/react/use-push-subscription-fcm.ts`:
+`src/react/use-push-subscription-fcm.ts`. Note the `typeof window === 'undefined'` guard at the top of `subscribe()` — same SSR-safe "no-op, stays idle" contract as `usePushSubscription` (Task 12), added preemptively here after that same gap was caught on Task 12's review.
 
 ```ts
 import { useCallback, useState } from 'react';
@@ -2012,6 +2325,9 @@ export function usePushSubscriptionFcm(opts: { firebaseConfig: object; vapidKey:
   const [status, setStatus] = useState<'idle' | 'subscribing' | 'subscribed' | 'error'>('idle');
 
   const subscribe = useCallback(async () => {
+    if (typeof window === 'undefined') {
+      return;
+    }
     setStatus('subscribing');
     try {
       const { initializeApp } = await import('firebase/app');
@@ -2133,7 +2449,7 @@ FCM, and APNs sending, subscription management, and notification history.
 ## Install
 
 \`\`\`bash
-npm install @idevconn/push-notification
+npm install @idevconn/push-notifications
 # plus whichever providers you use:
 npm install web-push        # Web Push
 npm install firebase-admin   # FCM
@@ -2187,8 +2503,4 @@ git add README.md
 git commit -m "docs: add README with install and usage examples"
 ```
 
-- [ ] **Step 4: Push**
-
-```bash
-git push origin main
-```
+**No push step here.** This work happens on a feature branch inside an isolated worktree, not `main` — pushing/merging is a decision made once, at the end of the whole plan (after the final whole-branch review), via the finishing-a-development-branch process. Task 15 ends at the commit.

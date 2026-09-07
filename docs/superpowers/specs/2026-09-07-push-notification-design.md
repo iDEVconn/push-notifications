@@ -139,9 +139,17 @@ PATCH /notifications/:id/read   -> mark as read
 ```
 
 Built against `NotificationLogStore` only — works with any adapter
-(TypeORM or custom). Registered by the module; consumer can disable by not
-importing the controller (module exposes it as a separate importable piece,
-not force-mounted).
+(TypeORM or custom). Not registered by `PushNotificationModule` — the
+consumer adds it to their own module's `controllers` array to mount it.
+
+Requires a `NOTIFICATION_AUTHORIZER` provider (interface
+`NotificationAuthorizer`, no default implementation) — the controller
+calls it before every operation and throws `ForbiddenException` if it
+returns false. Added after the initial design: an automated security
+review found the controller had no ownership check on `:userId`/`:id`,
+and a required, injectable authorizer was the fix that stayed consistent
+with this package's "consumer supplies the implementation, fails closed"
+approach to storage rather than baking in a specific auth strategy.
 
 ### NotificationWebhookController (opt-in)
 
