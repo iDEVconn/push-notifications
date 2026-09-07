@@ -347,13 +347,16 @@ git commit -m "chore: scaffold package tooling"
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { SUBSCRIPTION_STORE, NOTIFICATION_LOG_STORE } from '../index';
+import { SUBSCRIPTION_STORE, NOTIFICATION_LOG_STORE, NOTIFICATION_AUTHORIZER } from '../index';
 
 describe('DI tokens', () => {
   it('are unique symbols', () => {
     expect(typeof SUBSCRIPTION_STORE).toBe('symbol');
     expect(typeof NOTIFICATION_LOG_STORE).toBe('symbol');
+    expect(typeof NOTIFICATION_AUTHORIZER).toBe('symbol');
     expect(SUBSCRIPTION_STORE).not.toBe(NOTIFICATION_LOG_STORE);
+    expect(SUBSCRIPTION_STORE).not.toBe(NOTIFICATION_AUTHORIZER);
+    expect(NOTIFICATION_LOG_STORE).not.toBe(NOTIFICATION_AUTHORIZER);
   });
 });
 ```
@@ -370,6 +373,7 @@ Expected: FAIL — `SUBSCRIPTION_STORE` not exported.
 ```ts
 export const SUBSCRIPTION_STORE = Symbol('SUBSCRIPTION_STORE');
 export const NOTIFICATION_LOG_STORE = Symbol('NOTIFICATION_LOG_STORE');
+export const NOTIFICATION_AUTHORIZER = Symbol('NOTIFICATION_AUTHORIZER');
 
 export interface PushPayload {
   title: string;
@@ -421,7 +425,24 @@ export interface NotificationLogStore {
   findUnreadByUserId(userId: string): Promise<NotificationRecord[]>;
   markAsRead(id: string): Promise<void>;
 }
+
+/**
+ * Authorizes access to notification data. `request` is the raw HTTP
+ * request object (typed `unknown` to stay HTTP-adapter-agnostic — cast it
+ * to your framework's request type, e.g. Express's `Request`, to read
+ * whatever identity your auth middleware attached). This package has no
+ * opinion on auth strategy; providing a `NOTIFICATION_AUTHORIZER` is
+ * required to use `NotificationController` — there is no default
+ * implementation, so a consumer cannot wire the controller without
+ * deciding how access is checked.
+ */
+export interface NotificationAuthorizer {
+  authorizeUserAccess(request: unknown, userId: string): boolean | Promise<boolean>;
+  authorizeNotificationAccess(request: unknown, notificationId: string): boolean | Promise<boolean>;
+}
 ```
+
+**Added after Task 8:** `NOTIFICATION_AUTHORIZER`/`NotificationAuthorizer` were not part of this task's original scope — they were added retroactively (see Task 8's section) after a security review found `NotificationController` had no ownership check on its route params. A required, injectable authorizer (same "consumer supplies the implementation, fails closed without one" idiom as `SubscriptionStore`) was the fix, so it lives here alongside the other shared interfaces.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1349,8 +1370,10 @@ git commit -m "feat: add PushNotificationModule with forRoot/forRootAsync"
 - Test: `src/server/__tests__/notification.controller.spec.ts`
 
 **Interfaces:**
-- Consumes: `NotificationLogStore`, `NOTIFICATION_LOG_STORE` from `../index`.
-- Produces: `NotificationController` (Nest controller, `@Inject(NOTIFICATION_LOG_STORE)`) — consumed by `server/index.ts` barrel (Task 14).
+- Consumes: `NotificationLogStore`, `NOTIFICATION_LOG_STORE`, `NotificationAuthorizer`, `NOTIFICATION_AUTHORIZER` from `../index`.
+- Produces: `NotificationController` (Nest controller, `@Inject(NOTIFICATION_LOG_STORE)` + `@Inject(NOTIFICATION_AUTHORIZER)`) — consumed by `server/index.ts` barrel (Task 14).
+
+**Revision history:** the version below is the corrected, final form. A first pass shipped with no authorization at all (just `@Inject(NOTIFICATION_LOG_STORE)`, no ownership check on `:userId`/`:id`) and was caught by an automated security review as a HIGH-severity IDOR — any caller could read or mark-as-read any user's notifications. A doc-comment-only mitigation was tried first and rejected on re-review as inadequate (advisory-only, fails open). The fix below makes `NOTIFICATION_AUTHORIZER` a required constructor dependency — Nest fails to bootstrap without one — mirroring the same "consumer supplies the implementation, fails closed" idiom already used for `SubscriptionStore`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1358,11 +1381,19 @@ git commit -m "feat: add PushNotificationModule with forRoot/forRootAsync"
 
 ```ts
 import { describe, it, expect, vi } from 'vitest';
+import { ForbiddenException } from '@nestjs/common';
 import { NotificationController } from '../notification.controller';
-import type { NotificationLogStore, NotificationRecord } from '../../index';
+import type { NotificationAuthorizer, NotificationLogStore, NotificationRecord } from '../../index';
 
 function makeStore(): NotificationLogStore {
   return { save: vi.fn(), findUnreadByUserId: vi.fn(), markAsRead: vi.fn() };
+}
+
+function makeAuthorizer(allow = true): NotificationAuthorizer {
+  return {
+    authorizeUserAccess: vi.fn().mockResolvedValue(allow),
+    authorizeNotificationAccess: vi.fn().mockResolvedValue(allow),
+  };
 }
 
 const record: NotificationRecord = {
@@ -1374,26 +1405,50 @@ const record: NotificationRecord = {
   createdAt: new Date(),
 };
 
+const request = { headers: {} };
+
 describe('NotificationController', () => {
-  it('getNotifications returns unread list from store', async () => {
+  it('getNotifications returns unread list from store when authorized', async () => {
     const store = makeStore();
     (store.findUnreadByUserId as ReturnType<typeof vi.fn>).mockResolvedValue([record]);
-    const controller = new NotificationController(store);
+    const authorizer = makeAuthorizer(true);
+    const controller = new NotificationController(store, authorizer);
 
-    const result = await controller.getNotifications('user-1');
+    const result = await controller.getNotifications('user-1', request);
 
+    expect(authorizer.authorizeUserAccess).toHaveBeenCalledWith(request, 'user-1');
     expect(store.findUnreadByUserId).toHaveBeenCalledWith('user-1');
     expect(result).toEqual([record]);
   });
 
-  it('markAsRead delegates to store and returns success', async () => {
+  it('getNotifications throws ForbiddenException when not authorized', async () => {
     const store = makeStore();
-    const controller = new NotificationController(store);
+    const authorizer = makeAuthorizer(false);
+    const controller = new NotificationController(store, authorizer);
 
-    const result = await controller.markAsRead('n-1');
+    await expect(controller.getNotifications('user-1', request)).rejects.toThrow(ForbiddenException);
+    expect(store.findUnreadByUserId).not.toHaveBeenCalled();
+  });
 
+  it('markAsRead delegates to store and returns success when authorized', async () => {
+    const store = makeStore();
+    const authorizer = makeAuthorizer(true);
+    const controller = new NotificationController(store, authorizer);
+
+    const result = await controller.markAsRead('n-1', request);
+
+    expect(authorizer.authorizeNotificationAccess).toHaveBeenCalledWith(request, 'n-1');
     expect(store.markAsRead).toHaveBeenCalledWith('n-1');
     expect(result).toEqual({ success: true });
+  });
+
+  it('markAsRead throws ForbiddenException when not authorized', async () => {
+    const store = makeStore();
+    const authorizer = makeAuthorizer(false);
+    const controller = new NotificationController(store, authorizer);
+
+    await expect(controller.markAsRead('n-1', request)).rejects.toThrow(ForbiddenException);
+    expect(store.markAsRead).not.toHaveBeenCalled();
   });
 });
 ```
@@ -1405,35 +1460,39 @@ Expected: FAIL — module `../notification.controller` not found.
 
 - [ ] **Step 3: Write implementation**
 
-`src/server/notification.controller.ts`. Note the split import: `NotificationLogStore` must be a `type`-only import here — with this project's `isolatedModules` + `emitDecoratorMetadata` both on, TypeScript errors (`TS1272`) if a type used in a `@Inject`-decorated constructor parameter isn't explicitly imported as a type. `NOTIFICATION_LOG_STORE` stays a normal value import since it's used as the decorator's argument, not just a type.
+`src/server/notification.controller.ts`. Note the split import: `NotificationLogStore`/`NotificationAuthorizer` must be `type`-only imports here — with this project's `isolatedModules` + `emitDecoratorMetadata` both on, TypeScript errors (`TS1272`) if a type used in a `@Inject`-decorated constructor parameter isn't explicitly imported as a type. `NOTIFICATION_LOG_STORE`/`NOTIFICATION_AUTHORIZER` stay normal value imports since they're used as the decorators' arguments, not just types.
 
 ```ts
-import { Controller, Get, Param, Patch, Inject } from '@nestjs/common';
-import { NOTIFICATION_LOG_STORE } from '../index';
-import type { NotificationLogStore } from '../index';
+import { Controller, ForbiddenException, Get, Inject, Param, Patch, Req } from '@nestjs/common';
+import { NOTIFICATION_AUTHORIZER, NOTIFICATION_LOG_STORE } from '../index';
+import type { NotificationAuthorizer, NotificationLogStore } from '../index';
 
 /**
  * Not auto-registered by PushNotificationModule — add it to your own
- * module's `controllers` array to mount it.
- *
- * Performs NO authorization: `userId`/`id` come straight from the URL with
- * no ownership check against the caller. This package has no opinion on
- * auth (no auth dependency anywhere in it), so guarding this controller is
- * the consumer's responsibility — put an AuthGuard in front of it and
- * verify the resolved identity matches `:userId` (and that the record
- * behind `:id` belongs to the caller) before this ships to production.
+ * module's `controllers` array to mount it, alongside a provider for
+ * `NOTIFICATION_AUTHORIZER` (required — Nest fails to bootstrap without
+ * one, by design, so this controller cannot be wired up unguarded).
  */
 @Controller('notifications')
 export class NotificationController {
-  constructor(@Inject(NOTIFICATION_LOG_STORE) private readonly store: NotificationLogStore) {}
+  constructor(
+    @Inject(NOTIFICATION_LOG_STORE) private readonly store: NotificationLogStore,
+    @Inject(NOTIFICATION_AUTHORIZER) private readonly authorizer: NotificationAuthorizer,
+  ) {}
 
   @Get(':userId')
-  async getNotifications(@Param('userId') userId: string) {
+  async getNotifications(@Param('userId') userId: string, @Req() request: unknown) {
+    if (!(await this.authorizer.authorizeUserAccess(request, userId))) {
+      throw new ForbiddenException();
+    }
     return this.store.findUnreadByUserId(userId);
   }
 
   @Patch(':id/read')
-  async markAsRead(@Param('id') id: string) {
+  async markAsRead(@Param('id') id: string, @Req() request: unknown) {
+    if (!(await this.authorizer.authorizeNotificationAccess(request, id))) {
+      throw new ForbiddenException();
+    }
     await this.store.markAsRead(id);
     return { success: true };
   }
@@ -1443,13 +1502,13 @@ export class NotificationController {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run src/server/__tests__/notification.controller.spec.ts`
-Expected: PASS
+Expected: PASS — 4/4 tests (2 authorized-path, 2 forbidden-path)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/server/notification.controller.ts src/server/__tests__/notification.controller.spec.ts
-git commit -m "feat: add NotificationController for unread list and mark-as-read"
+git commit -m "feat: add NotificationController with required authorization check"
 ```
 
 ---

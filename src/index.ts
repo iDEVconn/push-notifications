@@ -1,5 +1,6 @@
 export const SUBSCRIPTION_STORE = Symbol('SUBSCRIPTION_STORE');
 export const NOTIFICATION_LOG_STORE = Symbol('NOTIFICATION_LOG_STORE');
+export const NOTIFICATION_AUTHORIZER = Symbol('NOTIFICATION_AUTHORIZER');
 
 export interface PushPayload {
   title: string;
@@ -50,4 +51,19 @@ export interface NotificationLogStore {
   save(record: { userId: string; title: string; body: string }): Promise<NotificationRecord>;
   findUnreadByUserId(userId: string): Promise<NotificationRecord[]>;
   markAsRead(id: string): Promise<void>;
+}
+
+/**
+ * Authorizes access to notification data. `request` is the raw HTTP
+ * request object (typed `unknown` to stay HTTP-adapter-agnostic — cast it
+ * to your framework's request type, e.g. Express's `Request`, to read
+ * whatever identity your auth middleware attached). This package has no
+ * opinion on auth strategy; providing a `NOTIFICATION_AUTHORIZER` is
+ * required to use `NotificationController` — there is no default
+ * implementation, so a consumer cannot wire the controller without
+ * deciding how access is checked.
+ */
+export interface NotificationAuthorizer {
+  authorizeUserAccess(request: unknown, userId: string): boolean | Promise<boolean>;
+  authorizeNotificationAccess(request: unknown, notificationId: string): boolean | Promise<boolean>;
 }
