@@ -36,7 +36,7 @@ function isDisallowedEndpoint(endpoint: string): boolean {
   if (url.protocol !== 'https:') return true;
   // Strip a trailing root "." (e.g. "localhost.") — DNS resolves it identically to the
   // name without the dot, so it must not bypass the pattern checks below.
-  const hostname = url.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const hostname = url.hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   return PRIVATE_HOSTNAME_PATTERNS.some((pattern) => pattern.test(hostname));
 }
 
@@ -68,8 +68,10 @@ export async function sendWebPush(
       target,
       success: false,
       error: {
-        // A missing/zero statusCode means this never reached the push service —
-        // it's an SDK-load or init failure (bad import, malformed VAPID config), not a send failure.
+        // A missing/zero statusCode means the failure didn't come back as an HTTP
+        // response from the push service — could be an SDK-load/init failure (bad
+        // import, malformed VAPID config) or a lower-level network error (DNS/TLS).
+        // Either way it's not a dead-token signal, so isDeadToken stays false below.
         code: statusCode ? String(statusCode) : 'init-error',
         // Don't propagate the raw upstream response body — it may echo back
         // content from a host we didn't intend to contact.

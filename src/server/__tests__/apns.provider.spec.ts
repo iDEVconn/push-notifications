@@ -79,6 +79,11 @@ describe('sendApns', () => {
     const result = await sendApnsFresh(target, { title: 't', body: 'b' }, config);
     expect(result.success).toBe(false);
     expect(result.error?.isDeadToken).toBe(false);
+    // Proves the throwing constructor was actually reached (not just a mock-swap
+    // no-op falling through to the reset sendMock, which would also report failure
+    // but with a different message).
+    expect(result.error?.code).toBe('apns-error');
+    expect(result.error?.message).toBe('bad token/key');
 
     // Restore the original mock so the module registry is clean for any other test files/runs.
     vi.resetModules();

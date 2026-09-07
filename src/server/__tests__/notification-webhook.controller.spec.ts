@@ -63,6 +63,25 @@ describe('NotificationWebhookController', () => {
     expect(service.pruneTarget).not.toHaveBeenCalled();
   });
 
+  it('throws BadRequestException and never touches the service when target.type is not a known provider type', async () => {
+    const service = makeService();
+    const verifier = makeVerifier(true);
+    const controller = new NotificationWebhookController(service, verifier);
+
+    await expect(
+      controller.handleDeliveryReport(
+        {
+          event: 'delivery.failed',
+          userId: 'user-1',
+          target: { type: 'bogus', userId: 'user-1', token: 'tok-1' } as never,
+          status: 'failed',
+        },
+        request,
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(service.pruneTarget).not.toHaveBeenCalled();
+  });
+
   it('throws ForbiddenException and never touches the service when verification fails', async () => {
     const service = makeService();
     const verifier = makeVerifier(false);

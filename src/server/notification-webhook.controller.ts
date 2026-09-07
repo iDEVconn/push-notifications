@@ -10,6 +10,8 @@ interface DeliveryReportBody {
   status: 'ok' | 'failed';
 }
 
+const VALID_TARGET_TYPES = new Set(['webpush', 'fcm', 'apns']);
+
 /**
  * Opt-in: import and register this controller only if an aggregator
  * (OneSignal, Airship, etc.) is configured to POST here. The three
@@ -34,8 +36,10 @@ export class NotificationWebhookController {
       throw new ForbiddenException();
     }
     if (body.status === 'failed') {
-      if (!body.userId || !body.target?.type) {
-        throw new BadRequestException('delivery-report: userId and target are required when status is failed');
+      if (!body.userId || !VALID_TARGET_TYPES.has(body.target?.type)) {
+        throw new BadRequestException(
+          'delivery-report: userId and a valid target (type: webpush|fcm|apns) are required when status is failed',
+        );
       }
       await this.pushService.pruneTarget(body.userId, body.target);
     }
