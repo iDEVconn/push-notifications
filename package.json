@@ -4,40 +4,88 @@
   "description": "Host-agnostic push notifications: Web Push/VAPID, FCM, APNs sending, a NestJS module, and React 19 hooks.",
   "license": "Apache-2.0",
   "author": "iDEVconn",
-  "repository": { "type": "git", "url": "git+https://github.com/iDEVconn/push-notifications.git" },
-  "bugs": { "url": "https://github.com/iDEVconn/push-notifications/issues" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iDEVconn/push-notifications.git"
+  },
+  "bugs": {
+    "url": "https://github.com/iDEVconn/push-notifications/issues"
+  },
   "homepage": "https://github.com/iDEVconn/push-notifications#readme",
-  "keywords": ["push", "notifications", "webpush", "vapid", "fcm", "apns", "nestjs", "react"],
+  "keywords": [
+    "push",
+    "notifications",
+    "webpush",
+    "vapid",
+    "fcm",
+    "apns",
+    "nestjs",
+    "react"
+  ],
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./server": {
-      "import": { "types": "./dist/server.d.ts", "default": "./dist/server.js" },
-      "require": { "types": "./dist/server.d.cts", "default": "./dist/server.cjs" }
+      "import": {
+        "types": "./dist/server.d.ts",
+        "default": "./dist/server.js"
+      },
+      "require": {
+        "types": "./dist/server.d.cts",
+        "default": "./dist/server.cjs"
+      }
     },
     "./react": {
-      "import": { "types": "./dist/react.d.ts", "default": "./dist/react.js" },
-      "require": { "types": "./dist/react.d.cts", "default": "./dist/react.cjs" }
+      "import": {
+        "types": "./dist/react.d.ts",
+        "default": "./dist/react.js"
+      },
+      "require": {
+        "types": "./dist/react.d.cts",
+        "default": "./dist/react.cjs"
+      }
     },
     "./typeorm": {
-      "import": { "types": "./dist/typeorm.d.ts", "default": "./dist/typeorm.js" },
-      "require": { "types": "./dist/typeorm.d.cts", "default": "./dist/typeorm.cjs" }
+      "import": {
+        "types": "./dist/typeorm.d.ts",
+        "default": "./dist/typeorm.js"
+      },
+      "require": {
+        "types": "./dist/typeorm.d.cts",
+        "default": "./dist/typeorm.cjs"
+      }
     }
   },
   "typesVersions": {
     "*": {
-      "server": ["./dist/server.d.ts"],
-      "react": ["./dist/react.d.ts"],
-      "typeorm": ["./dist/typeorm.d.ts"]
+      "server": [
+        "./dist/server.d.ts"
+      ],
+      "react": [
+        "./dist/react.d.ts"
+      ],
+      "typeorm": [
+        "./dist/typeorm.d.ts"
+      ]
     }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -50,24 +98,42 @@
   "peerDependencies": {
     "@nestjs/common": ">=11.0.0",
     "@nestjs/core": ">=11.0.0",
-    "react": ">=19.0.0",
-    "web-push": ">=3.6.0",
-    "firebase-admin": ">=12.0.0",
-    "@parse/node-apn": ">=6.0.0",
-    "typeorm": ">=0.3.0",
     "@nestjs/typeorm": ">=10.0.0",
-    "firebase": ">=10.0.0"
+    "@parse/node-apn": ">=6.0.0",
+    "firebase": ">=10.0.0",
+    "firebase-admin": ">=12.0.0",
+    "react": ">=19.0.0",
+    "typeorm": ">=0.3.0",
+    "web-push": ">=3.6.0"
   },
   "peerDependenciesMeta": {
-    "@nestjs/common": { "optional": true },
-    "@nestjs/core": { "optional": true },
-    "react": { "optional": true },
-    "web-push": { "optional": true },
-    "firebase-admin": { "optional": true },
-    "@parse/node-apn": { "optional": true },
-    "typeorm": { "optional": true },
-    "@nestjs/typeorm": { "optional": true },
-    "firebase": { "optional": true }
+    "@nestjs/common": {
+      "optional": true
+    },
+    "@nestjs/core": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "web-push": {
+      "optional": true
+    },
+    "firebase-admin": {
+      "optional": true
+    },
+    "@parse/node-apn": {
+      "optional": true
+    },
+    "typeorm": {
+      "optional": true
+    },
+    "@nestjs/typeorm": {
+      "optional": true
+    },
+    "firebase": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@changesets/cli": "^3.0.1",
@@ -76,6 +142,7 @@
     "@nestjs/testing": "^11.0.0",
     "@nestjs/typeorm": "^11.0.3",
     "@parse/node-apn": "^6.0.1",
+    "@swc/core": "^1.16.2",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.5.0",
     "@testing-library/react": "^16.0.1",
@@ -100,5 +167,7 @@
     "vitest": "^4.1.7",
     "web-push": "^3.6.7"
   },
-  "publishConfig": { "access": "public" }
+  "publishConfig": {
+    "access": "public"
+  }
 }

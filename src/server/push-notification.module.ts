@@ -55,6 +55,12 @@ export class PushNotificationModule {
   }
 
   static forRootAsync(options: {
+    // `any[]` matches Nest's own FactoryProvider.useFactory type — the args' real
+    // types depend entirely on what the consumer's own `inject` tokens resolve to
+    // (e.g. `ConfigService`), which this generic wrapper has no way to know ahead
+    // of time. `unknown[]` would reject exactly that usage under strict function
+    // parameter checking, so this isn't a lazy escape hatch.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     useFactory: (...args: any[]) => PushNotificationModuleConfig | Promise<PushNotificationModuleConfig>;
     inject?: (InjectionToken | OptionalFactoryDependency)[];
   }): DynamicModule {
