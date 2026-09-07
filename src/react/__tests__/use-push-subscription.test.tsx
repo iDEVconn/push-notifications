@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { usePushSubscription } from '../use-push-subscription';
 
-const mockSubscription = { endpoint: 'https://push.example/1' };
-const subscribeMock = vi.fn().mockResolvedValue(mockSubscription);
 const unsubscribeMock = vi.fn().mockResolvedValue(undefined);
+const mockSubscription = { endpoint: 'https://push.example/1', unsubscribe: unsubscribeMock };
+const subscribeMock = vi.fn().mockResolvedValue(mockSubscription);
 const getSubscriptionMock = vi.fn().mockResolvedValue(null);
 
 beforeEach(() => {
@@ -39,7 +39,7 @@ describe('usePushSubscription', () => {
     expect(result.current.subscription).toEqual(mockSubscription);
   });
 
-  it('unsubscribe() clears subscription state', async () => {
+  it('unsubscribe() calls the real subscription.unsubscribe() and clears state', async () => {
     const { result } = renderHook(() => usePushSubscription({ vapidPublicKey: 'pub', swPath: '/sw.js' }));
     await act(async () => {
       await result.current.subscribe();
@@ -49,6 +49,19 @@ describe('usePushSubscription', () => {
       await result.current.unsubscribe();
     });
 
+    expect(unsubscribeMock).toHaveBeenCalledOnce();
+    expect(result.current.subscription).toBeNull();
+    expect(result.current.status).toBe('idle');
+  });
+
+  it('unsubscribe() is a no-op when there is no active subscription', async () => {
+    const { result } = renderHook(() => usePushSubscription({ vapidPublicKey: 'pub', swPath: '/sw.js' }));
+
+    await act(async () => {
+      await result.current.unsubscribe();
+    });
+
+    expect(unsubscribeMock).not.toHaveBeenCalled();
     expect(result.current.subscription).toBeNull();
     expect(result.current.status).toBe('idle');
   });
@@ -62,5 +75,17 @@ describe('usePushSubscription', () => {
     });
 
     expect(result.current.status).toBe('error');
+  });
+
+  it('subscribe() stays idle (no-op) when navigator.serviceWorker is unavailable', async () => {
+    vi.stubGlobal('navigator', {});
+    const { result } = renderHook(() => usePushSubscription({ vapidPublicKey: 'pub', swPath: '/sw.js' }));
+
+    await act(async () => {
+      await result.current.subscribe();
+    });
+
+    expect(result.current.status).toBe('idle');
+    expect(subscribeMock).not.toHaveBeenCalled();
   });
 });

@@ -13,7 +13,6 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
 
   const subscribe = useCallback(async () => {
     if (typeof navigator === 'undefined' || !navigator.serviceWorker) {
-      setStatus('error');
       return;
     }
     setStatus('subscribing');
@@ -23,7 +22,7 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(opts.vapidPublicKey) as BufferSource,
       });
-      setSubscription(sub as unknown as PushSubscription);
+      setSubscription(sub);
       setStatus('subscribed');
     } catch {
       setStatus('error');
@@ -31,9 +30,12 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
   }, [opts.swPath, opts.vapidPublicKey]);
 
   const unsubscribe = useCallback(async () => {
+    if (subscription) {
+      await subscription.unsubscribe();
+    }
     setSubscription(null);
     setStatus('idle');
-  }, []);
+  }, [subscription]);
 
   return { subscription, status, subscribe, unsubscribe };
 }

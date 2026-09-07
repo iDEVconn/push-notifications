@@ -2044,6 +2044,8 @@ git commit -m "feat: add usePushPermission hook"
 **Interfaces:**
 - Produces: `usePushSubscription({ vapidPublicKey, swPath }): { subscription: PushSubscription | null; status: 'idle'|'subscribing'|'subscribed'|'error'; subscribe(): Promise<void>; unsubscribe(): Promise<void> }` — consumed by `react/index.ts` barrel (Task 14).
 
+**Revision history:** the version below is the corrected, final form. A first pass set `status: 'error'` when `navigator.serviceWorker` was unavailable (contradicting the design's "SSR-safe: no-op, stays idle" contract) and had `unsubscribe()` only clear React state without calling the real `subscription.unsubscribe()` — leaving the subscription live with the push service even though the hook reported `idle`/`null`. Caught on task review; both are plan-mandated bugs (not implementer deviation), fixed below.
+
 - [ ] **Step 1: Write the failing test**
 
 `src/react/__tests__/use-push-subscription.test.tsx`:
@@ -2053,9 +2055,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { usePushSubscription } from '../use-push-subscription';
 
-const mockSubscription = { endpoint: 'https://push.example/1' };
-const subscribeMock = vi.fn().mockResolvedValue(mockSubscription);
 const unsubscribeMock = vi.fn().mockResolvedValue(undefined);
+const mockSubscription = { endpoint: 'https://push.example/1', unsubscribe: unsubscribeMock };
+const subscribeMock = vi.fn().mockResolvedValue(mockSubscription);
 const getSubscriptionMock = vi.fn().mockResolvedValue(null);
 
 beforeEach(() => {
@@ -2090,7 +2092,7 @@ describe('usePushSubscription', () => {
     expect(result.current.subscription).toEqual(mockSubscription);
   });
 
-  it('unsubscribe() clears subscription state', async () => {
+  it('unsubscribe() calls the real subscription.unsubscribe() and clears state', async () => {
     const { result } = renderHook(() => usePushSubscription({ vapidPublicKey: 'pub', swPath: '/sw.js' }));
     await act(async () => {
       await result.current.subscribe();
@@ -2100,6 +2102,19 @@ describe('usePushSubscription', () => {
       await result.current.unsubscribe();
     });
 
+    expect(unsubscribeMock).toHaveBeenCalledOnce();
+    expect(result.current.subscription).toBeNull();
+    expect(result.current.status).toBe('idle');
+  });
+
+  it('unsubscribe() is a no-op when there is no active subscription', async () => {
+    const { result } = renderHook(() => usePushSubscription({ vapidPublicKey: 'pub', swPath: '/sw.js' }));
+
+    await act(async () => {
+      await result.current.unsubscribe();
+    });
+
+    expect(unsubscribeMock).not.toHaveBeenCalled();
     expect(result.current.subscription).toBeNull();
     expect(result.current.status).toBe('idle');
   });
@@ -2114,6 +2129,18 @@ describe('usePushSubscription', () => {
 
     expect(result.current.status).toBe('error');
   });
+
+  it('subscribe() stays idle (no-op) when navigator.serviceWorker is unavailable', async () => {
+    vi.stubGlobal('navigator', {});
+    const { result } = renderHook(() => usePushSubscription({ vapidPublicKey: 'pub', swPath: '/sw.js' }));
+
+    await act(async () => {
+      await result.current.subscribe();
+    });
+
+    expect(result.current.status).toBe('idle');
+    expect(subscribeMock).not.toHaveBeenCalled();
+  });
 });
 ```
 
@@ -2124,7 +2151,7 @@ Expected: FAIL — module not found.
 
 - [ ] **Step 3: Write implementation**
 
-`src/react/use-push-subscription.ts`. Note the `as BufferSource` cast on `applicationServerKey` — the DOM lib's typed-array generics (`Uint8Array<ArrayBufferLike>` vs. the expected `ArrayBufferView<ArrayBuffer>`) make `Uint8Array.from(...)`'s return type incompatible with `PushSubscriptionOptionsInit.applicationServerKey` without it, even though the runtime value is correct — this is a real `tsc --noEmit` failure (`TS2322`), not caught by `vitest` alone since it doesn't type-check.
+`src/react/use-push-subscription.ts`. Two notes: (1) `as BufferSource` on `applicationServerKey` — the DOM lib's typed-array generics (`Uint8Array<ArrayBufferLike>` vs. the expected `ArrayBufferView<ArrayBuffer>`) make `Uint8Array.from(...)`'s return type incompatible without it, even though the runtime value is correct (a real `tsc --noEmit` failure, `TS2322`, not caught by `vitest` alone since it doesn't type-check). (2) the SSR guard just `return`s (leaving `status` at whatever it already was, i.e. `idle` on first call) rather than setting `'error'` — per the design's "no-op" contract, an unsupported environment isn't a *failure*, it's an absence of the feature.
 
 ```ts
 import { useCallback, useState } from 'react';
@@ -2142,7 +2169,6 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
 
   const subscribe = useCallback(async () => {
     if (typeof navigator === 'undefined' || !navigator.serviceWorker) {
-      setStatus('error');
       return;
     }
     setStatus('subscribing');
@@ -2152,7 +2178,7 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(opts.vapidPublicKey) as BufferSource,
       });
-      setSubscription(sub as unknown as PushSubscription);
+      setSubscription(sub);
       setStatus('subscribed');
     } catch {
       setStatus('error');
@@ -2160,9 +2186,12 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
   }, [opts.swPath, opts.vapidPublicKey]);
 
   const unsubscribe = useCallback(async () => {
+    if (subscription) {
+      await subscription.unsubscribe();
+    }
     setSubscription(null);
     setStatus('idle');
-  }, []);
+  }, [subscription]);
 
   return { subscription, status, subscribe, unsubscribe };
 }
@@ -2171,7 +2200,7 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run src/react/__tests__/use-push-subscription.test.tsx`
-Expected: PASS
+Expected: PASS — 6/6 tests
 
 - [ ] **Step 5: Commit**
 
