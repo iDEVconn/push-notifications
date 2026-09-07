@@ -23,9 +23,8 @@ export async function sendFcm(
   payload: PushPayload,
   config: FcmConfig,
 ): Promise<SendResult> {
-  const messaging = await getMessaging(config);
-
   try {
+    const messaging = await getMessaging(config);
     await messaging.send({
       token: target.token,
       notification: { title: payload.title, body: payload.body },
