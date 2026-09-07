@@ -2124,7 +2124,7 @@ Expected: FAIL — module not found.
 
 - [ ] **Step 3: Write implementation**
 
-`src/react/use-push-subscription.ts`:
+`src/react/use-push-subscription.ts`. Note the `as BufferSource` cast on `applicationServerKey` — the DOM lib's typed-array generics (`Uint8Array<ArrayBufferLike>` vs. the expected `ArrayBufferView<ArrayBuffer>`) make `Uint8Array.from(...)`'s return type incompatible with `PushSubscriptionOptionsInit.applicationServerKey` without it, even though the runtime value is correct — this is a real `tsc --noEmit` failure (`TS2322`), not caught by `vitest` alone since it doesn't type-check.
 
 ```ts
 import { useCallback, useState } from 'react';
@@ -2150,7 +2150,7 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
       const registration = await navigator.serviceWorker.register(opts.swPath);
       const sub = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(opts.vapidPublicKey),
+        applicationServerKey: urlBase64ToUint8Array(opts.vapidPublicKey) as BufferSource,
       });
       setSubscription(sub as unknown as PushSubscription);
       setStatus('subscribed');

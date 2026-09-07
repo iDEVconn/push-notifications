@@ -21,7 +21,7 @@ export function usePushSubscription(opts: { vapidPublicKey: string; swPath: stri
       const registration = await navigator.serviceWorker.register(opts.swPath);
       const sub = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(opts.vapidPublicKey),
+        applicationServerKey: urlBase64ToUint8Array(opts.vapidPublicKey) as BufferSource,
       });
       setSubscription(sub as unknown as PushSubscription);
       setStatus('subscribed');
