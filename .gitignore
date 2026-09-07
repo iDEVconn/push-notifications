@@ -3,3 +3,8 @@ dist
 *.log
 .DS_Store
 .worktrees/
+ruvector.db
+agentdb.rvf
+agentdb.rvf.lock
+.claude-flow/
+.swarm/
