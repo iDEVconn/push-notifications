@@ -2278,13 +2278,15 @@ describe('usePushSubscriptionFcm', () => {
   });
 
   it('subscribe() stays idle (no-op) when window is unavailable', async () => {
+    getTokenMock.mockReset();
+    initializeAppMock.mockClear();
     const originalWindow = global.window;
-    // @ts-expect-error -- simulating an SSR environment for this one test
-    delete global.window;
-
     const { result } = renderHook(() =>
       usePushSubscriptionFcm({ firebaseConfig: { projectId: 'p' }, vapidKey: 'vk' }),
     );
+
+    // @ts-expect-error -- simulating an SSR environment for this one test
+    delete global.window;
 
     await act(async () => {
       await result.current.subscribe();
