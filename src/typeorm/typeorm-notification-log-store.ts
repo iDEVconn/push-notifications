@@ -2,6 +2,12 @@ import type { Repository } from 'typeorm';
 import type { NotificationLogStore, NotificationRecord } from '../index';
 import { NotificationEntity } from './notification.entity';
 
+/**
+ * `save()`'s createdAt ordering guarantee is per store-instance only —
+ * two separate instances (e.g. across a process restart) don't coordinate,
+ * so "newest first" is only strictly guaranteed for saves issued through
+ * the same instance.
+ */
 export class TypeOrmNotificationLogStore implements NotificationLogStore {
   // Tracks the last createdAt (ms since epoch) issued by this store instance,
   // so back-to-back saves always get a strictly increasing timestamp.
