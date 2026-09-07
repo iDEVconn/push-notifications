@@ -2237,11 +2237,6 @@ vi.mock('firebase/messaging', () => ({ getMessaging: getMessagingMock, getToken:
 
 import { usePushSubscriptionFcm } from '../use-push-subscription-fcm';
 
-beforeEach(() => {
-  getTokenMock.mockReset();
-  initializeAppMock.mockClear();
-});
-
 describe('usePushSubscriptionFcm', () => {
   it('starts idle with no token', () => {
     const { result } = renderHook(() =>
@@ -2252,6 +2247,8 @@ describe('usePushSubscriptionFcm', () => {
   });
 
   it('subscribe() initializes firebase and stores the token', async () => {
+    getTokenMock.mockReset();
+    initializeAppMock.mockClear();
     getTokenMock.mockResolvedValue('fcm-token-abc');
     const { result } = renderHook(() =>
       usePushSubscriptionFcm({ firebaseConfig: { projectId: 'p' }, vapidKey: 'vk' }),
@@ -2266,6 +2263,8 @@ describe('usePushSubscriptionFcm', () => {
   });
 
   it('sets status to error when getToken throws', async () => {
+    getTokenMock.mockReset();
+    initializeAppMock.mockClear();
     getTokenMock.mockRejectedValue(new Error('permission denied'));
     const { result } = renderHook(() =>
       usePushSubscriptionFcm({ firebaseConfig: { projectId: 'p' }, vapidKey: 'vk' }),
@@ -2277,8 +2276,29 @@ describe('usePushSubscriptionFcm', () => {
 
     expect(result.current.status).toBe('error');
   });
+
+  it('subscribe() stays idle (no-op) when window is unavailable', async () => {
+    const originalWindow = global.window;
+    // @ts-expect-error -- simulating an SSR environment for this one test
+    delete global.window;
+
+    const { result } = renderHook(() =>
+      usePushSubscriptionFcm({ firebaseConfig: { projectId: 'p' }, vapidKey: 'vk' }),
+    );
+
+    await act(async () => {
+      await result.current.subscribe();
+    });
+
+    expect(result.current.status).toBe('idle');
+    expect(initializeAppMock).not.toHaveBeenCalled();
+
+    global.window = originalWindow;
+  });
 });
 ```
+
+**Note on reset timing:** same fix as Tasks 3/4 — `.mockReset()`/`.mockClear()` run as the first lines of each `it`, never in a `beforeEach`. On this project's `vitest@4.1.11`, resetting a mock inside `beforeEach` corrupts that mock's rejection handling for the test that follows when a persistent `.mockRejectedValue()` is set later in the same test (verified by isolated repro during Task 3; `.mockRejectedValueOnce()` and `.mockResolvedValue()` are both unaffected).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -2287,7 +2307,7 @@ Expected: FAIL — module not found.
 
 - [ ] **Step 3: Write implementation**
 
-`src/react/use-push-subscription-fcm.ts`:
+`src/react/use-push-subscription-fcm.ts`. Note the `typeof window === 'undefined'` guard at the top of `subscribe()` — same SSR-safe "no-op, stays idle" contract as `usePushSubscription` (Task 12), added preemptively here after that same gap was caught on Task 12's review.
 
 ```ts
 import { useCallback, useState } from 'react';
@@ -2297,6 +2317,9 @@ export function usePushSubscriptionFcm(opts: { firebaseConfig: object; vapidKey:
   const [status, setStatus] = useState<'idle' | 'subscribing' | 'subscribed' | 'error'>('idle');
 
   const subscribe = useCallback(async () => {
+    if (typeof window === 'undefined') {
+      return;
+    }
     setStatus('subscribing');
     try {
       const { initializeApp } = await import('firebase/app');
