@@ -347,19 +347,26 @@ git commit -m "chore: scaffold package tooling"
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { SUBSCRIPTION_STORE, NOTIFICATION_LOG_STORE, NOTIFICATION_AUTHORIZER } from '../index';
+import {
+  SUBSCRIPTION_STORE,
+  NOTIFICATION_LOG_STORE,
+  NOTIFICATION_AUTHORIZER,
+  NOTIFICATION_WEBHOOK_VERIFIER,
+} from '../index';
+
+const TOKENS = [SUBSCRIPTION_STORE, NOTIFICATION_LOG_STORE, NOTIFICATION_AUTHORIZER, NOTIFICATION_WEBHOOK_VERIFIER];
 
 describe('DI tokens', () => {
   it('are unique symbols', () => {
-    expect(typeof SUBSCRIPTION_STORE).toBe('symbol');
-    expect(typeof NOTIFICATION_LOG_STORE).toBe('symbol');
-    expect(typeof NOTIFICATION_AUTHORIZER).toBe('symbol');
-    expect(SUBSCRIPTION_STORE).not.toBe(NOTIFICATION_LOG_STORE);
-    expect(SUBSCRIPTION_STORE).not.toBe(NOTIFICATION_AUTHORIZER);
-    expect(NOTIFICATION_LOG_STORE).not.toBe(NOTIFICATION_AUTHORIZER);
+    for (const token of TOKENS) {
+      expect(typeof token).toBe('symbol');
+    }
+    expect(new Set(TOKENS).size).toBe(TOKENS.length);
   });
 });
 ```
+
+**Note:** `NOTIFICATION_WEBHOOK_VERIFIER` was added retroactively during Task 9 (see that task's section) for the same reason `NOTIFICATION_AUTHORIZER` was added during Task 8 — a required, injectable security hook, added here for consistency with the other shared tokens.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -374,6 +381,7 @@ Expected: FAIL — `SUBSCRIPTION_STORE` not exported.
 export const SUBSCRIPTION_STORE = Symbol('SUBSCRIPTION_STORE');
 export const NOTIFICATION_LOG_STORE = Symbol('NOTIFICATION_LOG_STORE');
 export const NOTIFICATION_AUTHORIZER = Symbol('NOTIFICATION_AUTHORIZER');
+export const NOTIFICATION_WEBHOOK_VERIFIER = Symbol('NOTIFICATION_WEBHOOK_VERIFIER');
 
 export interface PushPayload {
   title: string;
@@ -439,6 +447,19 @@ export interface NotificationLogStore {
 export interface NotificationAuthorizer {
   authorizeUserAccess(request: unknown, userId: string): boolean | Promise<boolean>;
   authorizeNotificationAccess(request: unknown, notificationId: string): boolean | Promise<boolean>;
+}
+
+/**
+ * Verifies an inbound delivery-report webhook actually came from the
+ * configured aggregator (OneSignal, Airship, etc.) — e.g. checking an
+ * HMAC signature header against a shared secret. `request` is typed
+ * `unknown` for the same host-agnostic reason as `NotificationAuthorizer`.
+ * Required to use `NotificationWebhookController` — without it, anyone
+ * who can reach the endpoint could fabricate a "failed" delivery report
+ * and prune an arbitrary user's push subscription.
+ */
+export interface NotificationWebhookVerifier {
+  verify(request: unknown): boolean | Promise<boolean>;
 }
 ```
 
@@ -1520,8 +1541,10 @@ git commit -m "feat: add NotificationController with required authorization chec
 - Test: `src/server/__tests__/notification-webhook.controller.spec.ts`
 
 **Interfaces:**
-- Consumes: `PushService` (Task 6) for `pruneTarget`.
+- Consumes: `PushService` (Task 6) for `pruneTarget`; `NotificationWebhookVerifier`, `NOTIFICATION_WEBHOOK_VERIFIER` from `../index`.
 - Produces: `NotificationWebhookController`, and a new `PushService.pruneTarget(userId, target)` public method (adds to the class from Task 6) — consumed by `server/index.ts` barrel (Task 14). Not auto-registered by `PushNotificationModule`; consumer imports it explicitly.
+
+**Security note (learned from Task 8):** this endpoint is unauthenticated by nature — it's meant to be called by an external aggregator, not a logged-in user, so there's no `userId`/session to check like Task 8's controller. But without ANY verification, anyone who can reach it could POST a fabricated `status: 'failed'` body and prune an arbitrary user's push subscription. `NotificationWebhookVerifier` is a required constructor dependency (same fail-closed idiom as `NotificationAuthorizer`) so this can't be wired up without the consumer deciding how to verify the caller (typically an HMAC signature check against their aggregator's shared secret).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1529,37 +1552,66 @@ git commit -m "feat: add NotificationController with required authorization chec
 
 ```ts
 import { describe, it, expect, vi } from 'vitest';
+import { ForbiddenException } from '@nestjs/common';
 import { NotificationWebhookController } from '../notification-webhook.controller';
 import { PushService } from '../push.service';
+import type { NotificationWebhookVerifier } from '../../index';
 
 function makeService() {
   return { pruneTarget: vi.fn() } as unknown as PushService;
 }
 
+function makeVerifier(allow = true): NotificationWebhookVerifier {
+  return { verify: vi.fn().mockResolvedValue(allow) };
+}
+
+const request = { headers: {} };
+
 describe('NotificationWebhookController', () => {
-  it('acknowledges receipt for a well-formed body', async () => {
+  it('acknowledges receipt for a well-formed, verified body', async () => {
     const service = makeService();
-    const controller = new NotificationWebhookController(service);
+    const verifier = makeVerifier(true);
+    const controller = new NotificationWebhookController(service, verifier);
 
-    const result = await controller.handleDeliveryReport({
-      event: 'delivery.ok',
-      userId: 'user-1',
-      target: { type: 'fcm', userId: 'user-1', token: 'tok-1' },
-      status: 'ok',
-    });
+    const result = await controller.handleDeliveryReport(
+      {
+        event: 'delivery.ok',
+        userId: 'user-1',
+        target: { type: 'fcm', userId: 'user-1', token: 'tok-1' },
+        status: 'ok',
+      },
+      request,
+    );
 
+    expect(verifier.verify).toHaveBeenCalledWith(request);
     expect(result).toEqual({ received: true });
     expect(service.pruneTarget).not.toHaveBeenCalled();
   });
 
-  it('prunes target when status is failed', async () => {
+  it('prunes target when status is failed and verified', async () => {
     const service = makeService();
-    const controller = new NotificationWebhookController(service);
+    const verifier = makeVerifier(true);
+    const controller = new NotificationWebhookController(service, verifier);
     const target = { type: 'fcm' as const, userId: 'user-1', token: 'tok-1' };
 
-    await controller.handleDeliveryReport({ event: 'delivery.failed', userId: 'user-1', target, status: 'failed' });
+    await controller.handleDeliveryReport(
+      { event: 'delivery.failed', userId: 'user-1', target, status: 'failed' },
+      request,
+    );
 
     expect(service.pruneTarget).toHaveBeenCalledWith('user-1', target);
+  });
+
+  it('throws ForbiddenException and never touches the service when verification fails', async () => {
+    const service = makeService();
+    const verifier = makeVerifier(false);
+    const controller = new NotificationWebhookController(service, verifier);
+    const target = { type: 'fcm' as const, userId: 'user-1', token: 'tok-1' };
+
+    await expect(
+      controller.handleDeliveryReport({ event: 'delivery.failed', userId: 'user-1', target, status: 'failed' }, request),
+    ).rejects.toThrow(ForbiddenException);
+    expect(service.pruneTarget).not.toHaveBeenCalled();
   });
 });
 ```
@@ -1581,10 +1633,13 @@ Modify `src/server/push.service.ts` — add this public method to the `PushServi
 
 - [ ] **Step 4: Write `notification-webhook.controller.ts`**
 
+Note the split import, same TS1272 reason as Task 8: `NotificationWebhookVerifier` is only ever used as a type, so it needs `import type`, while `NOTIFICATION_WEBHOOK_VERIFIER` stays a value import (it's the decorator's argument).
+
 ```ts
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, HttpCode, HttpStatus, Inject, Post, Req } from '@nestjs/common';
+import { NOTIFICATION_WEBHOOK_VERIFIER } from '../index';
+import type { PushTarget, NotificationWebhookVerifier } from '../index';
 import { PushService } from './push.service';
-import type { PushTarget } from '../index';
 
 interface DeliveryReportBody {
   event: string;
@@ -1598,14 +1653,24 @@ interface DeliveryReportBody {
  * (OneSignal, Airship, etc.) is configured to POST here. The three
  * built-in providers (web-push/FCM/APNs) never call this endpoint —
  * they report failures synchronously in the send response instead.
+ *
+ * Requires a `NOTIFICATION_WEBHOOK_VERIFIER` provider (required — Nest
+ * fails to bootstrap without one) to confirm the request actually came
+ * from your aggregator before acting on it.
  */
 @Controller('webhooks/notifications')
 export class NotificationWebhookController {
-  constructor(private readonly pushService: PushService) {}
+  constructor(
+    private readonly pushService: PushService,
+    @Inject(NOTIFICATION_WEBHOOK_VERIFIER) private readonly verifier: NotificationWebhookVerifier,
+  ) {}
 
   @Post('delivery-report')
   @HttpCode(HttpStatus.OK)
-  async handleDeliveryReport(@Body() body: DeliveryReportBody) {
+  async handleDeliveryReport(@Body() body: DeliveryReportBody, @Req() request: unknown) {
+    if (!(await this.verifier.verify(request))) {
+      throw new ForbiddenException();
+    }
     if (body.status === 'failed') {
       await this.pushService.pruneTarget(body.userId, body.target);
     }
@@ -1617,13 +1682,13 @@ export class NotificationWebhookController {
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `npx vitest run src/server/__tests__/notification-webhook.controller.spec.ts src/server/__tests__/push.service.spec.ts`
-Expected: PASS (both files — confirms the `pruneTarget` addition didn't break Task 6's tests)
+Expected: PASS — 3/3 in the new file (both files together confirm the `pruneTarget` addition didn't break Task 6's tests)
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/server/notification-webhook.controller.ts src/server/__tests__/notification-webhook.controller.spec.ts src/server/push.service.ts
-git commit -m "feat: add opt-in NotificationWebhookController for aggregator delivery reports"
+git commit -m "feat: add opt-in NotificationWebhookController with required signature verification"
 ```
 
 ---

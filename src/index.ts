@@ -1,6 +1,7 @@
 export const SUBSCRIPTION_STORE = Symbol('SUBSCRIPTION_STORE');
 export const NOTIFICATION_LOG_STORE = Symbol('NOTIFICATION_LOG_STORE');
 export const NOTIFICATION_AUTHORIZER = Symbol('NOTIFICATION_AUTHORIZER');
+export const NOTIFICATION_WEBHOOK_VERIFIER = Symbol('NOTIFICATION_WEBHOOK_VERIFIER');
 
 export interface PushPayload {
   title: string;
@@ -66,4 +67,17 @@ export interface NotificationLogStore {
 export interface NotificationAuthorizer {
   authorizeUserAccess(request: unknown, userId: string): boolean | Promise<boolean>;
   authorizeNotificationAccess(request: unknown, notificationId: string): boolean | Promise<boolean>;
+}
+
+/**
+ * Verifies an inbound delivery-report webhook actually came from the
+ * configured aggregator (OneSignal, Airship, etc.) — e.g. checking an
+ * HMAC signature header against a shared secret. `request` is typed
+ * `unknown` for the same host-agnostic reason as `NotificationAuthorizer`.
+ * Required to use `NotificationWebhookController` — without it, anyone
+ * who can reach the endpoint could fabricate a "failed" delivery report
+ * and prune an arbitrary user's push subscription.
+ */
+export interface NotificationWebhookVerifier {
+  verify(request: unknown): boolean | Promise<boolean>;
 }
