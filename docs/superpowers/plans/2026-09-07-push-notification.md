@@ -2449,7 +2449,7 @@ FCM, and APNs sending, subscription management, and notification history.
 ## Install
 
 \`\`\`bash
-npm install @idevconn/push-notification
+npm install @idevconn/push-notifications
 # plus whichever providers you use:
 npm install web-push        # Web Push
 npm install firebase-admin   # FCM
@@ -2503,8 +2503,4 @@ git add README.md
 git commit -m "docs: add README with install and usage examples"
 ```
 
-- [ ] **Step 4: Push**
-
-```bash
-git push origin main
-```
+**No push step here.** This work happens on a feature branch inside an isolated worktree, not `main` — pushing/merging is a decision made once, at the end of the whole plan (after the final whole-branch review), via the finishing-a-development-branch process. Task 15 ends at the commit.
