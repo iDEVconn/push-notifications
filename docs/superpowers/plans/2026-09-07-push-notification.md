@@ -163,7 +163,7 @@ src/
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
-    "@nestjs/typeorm": "^10.0.2",
+    "@nestjs/typeorm": "^11.0.3",
     "@parse/node-apn": "^6.0.1",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.5.0",
@@ -216,7 +216,7 @@ src/
     "noUnusedParameters": true
   },
   "include": ["src"],
-  "exclude": ["dist", "node_modules", "**/__tests__/**"]
+  "exclude": ["dist", "node_modules"]
 }
 ```
 
@@ -253,6 +253,8 @@ export default defineConfig({
 ```
 
 - [ ] **Step 4: Write `eslint.config.js`**
+
+`tsconfig.json`'s `include: ["src"]` (Step 2) covers test files too — `dist` output is controlled by tsup's own entry-point-reachability bundling (Task 14), not by this tsconfig's file list, so including tests here has no build-leakage risk. `eslint.config.js`'s `files` glob below also matches test files for type-aware linting, so it can point straight at the same `tsconfig.json`.
 
 ```js
 import tsPlugin from '@typescript-eslint/eslint-plugin';
@@ -450,7 +452,7 @@ git commit -m "feat: add shared push notification types and DI tokens"
 `src/server/__tests__/webpush.provider.spec.ts`:
 
 ```ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 const sendNotificationMock = vi.fn();
 vi.mock('web-push', () => ({
@@ -471,10 +473,9 @@ const target: PushTarget = {
 
 const config = { vapidPublicKey: 'pub', vapidPrivateKey: 'priv', subject: 'mailto:a@b.com' };
 
-beforeEach(() => sendNotificationMock.mockReset());
-
 describe('sendWebPush', () => {
   it('returns success on 201/200 response', async () => {
+    sendNotificationMock.mockReset();
     sendNotificationMock.mockResolvedValue({ statusCode: 201 });
     const result = await sendWebPush(target, { title: 't', body: 'b' }, config);
     expect(result.success).toBe(true);
@@ -482,7 +483,8 @@ describe('sendWebPush', () => {
   });
 
   it('flags dead token on 410 Gone', async () => {
-    sendNotificationMock.mockRejectedValue({ statusCode: 410, body: 'gone' });
+    sendNotificationMock.mockReset();
+    sendNotificationMock.mockRejectedValue(Object.assign(new Error('Gone'), { statusCode: 410, body: 'gone' }));
     const result = await sendWebPush(target, { title: 't', body: 'b' }, config);
     expect(result.success).toBe(false);
     expect(result.error?.isDeadToken).toBe(true);
@@ -490,20 +492,52 @@ describe('sendWebPush', () => {
   });
 
   it('flags dead token on 404 Not Found', async () => {
-    sendNotificationMock.mockRejectedValue({ statusCode: 404, body: 'not found' });
+    sendNotificationMock.mockReset();
+    sendNotificationMock.mockRejectedValue(Object.assign(new Error('Not Found'), { statusCode: 404, body: 'not found' }));
     const result = await sendWebPush(target, { title: 't', body: 'b' }, config);
     expect(result.error?.isDeadToken).toBe(true);
   });
 
   it('returns non-fatal error on other failures', async () => {
-    sendNotificationMock.mockRejectedValue({ statusCode: 500, body: 'server error' });
+    sendNotificationMock.mockReset();
+    sendNotificationMock.mockRejectedValue(Object.assign(new Error('Server Error'), { statusCode: 500, body: 'server error' }));
     const result = await sendWebPush(target, { title: 't', body: 'b' }, config);
     expect(result.success).toBe(false);
     expect(result.error?.isDeadToken).toBe(false);
     expect(result.error?.code).toBe('500');
   });
+
+  it('rejects non-https endpoints without attempting to send', async () => {
+    sendNotificationMock.mockReset();
+    const httpTarget: PushTarget = {
+      type: 'webpush',
+      userId: 'user-1',
+      subscription: { endpoint: 'http://push.example/abc', keys: { p256dh: 'p', auth: 'a' } },
+    };
+    const result = await sendWebPush(httpTarget, { title: 't', body: 'b' }, config);
+    expect(result.success).toBe(false);
+    expect(result.error?.code).toBe('invalid-endpoint');
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects endpoints pointing at private or loopback hosts', async () => {
+    sendNotificationMock.mockReset();
+    const privateTarget: PushTarget = {
+      type: 'webpush',
+      userId: 'user-1',
+      subscription: { endpoint: 'https://127.0.0.1/abc', keys: { p256dh: 'p', auth: 'a' } },
+    };
+    const result = await sendWebPush(privateTarget, { title: 't', body: 'b' }, config);
+    expect(result.success).toBe(false);
+    expect(result.error?.code).toBe('invalid-endpoint');
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+  });
 });
 ```
+
+**Note on rejection mocks and reset timing:** two non-obvious fixes here versus a naive test:
+1. `sendNotificationMock.mockReset()` is called as the FIRST LINE of each `it`, not in a `beforeEach`. On this project's `vitest@4.1.11`, calling `.mockReset()`/`.mockClear()` inside a `beforeEach` hook corrupts that mock's rejection handling for the test that follows — a `mockRejectedValue()` set later in the same test then gets misreported as a test failure even though it's caught in `try/catch` and every assertion passes. Verified by isolated repro: identical test passes when the reset is inline, fails when the exact same reset is moved into `beforeEach`. This is a hook-timing defect in this vitest version, not a matter of Error-vs-plain-object rejection values.
+2. Every `mockRejectedValue` uses `Object.assign(new Error(...), {...})` rather than a plain object literal. Not required to dodge the bug above (that's fixed by point 1 alone) — kept because it's the more faithful mock: the real `web-push` package rejects with `WebPushError`, an `Error` subclass, not a plain object.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -525,11 +559,47 @@ export interface WebPushConfig {
 
 const DEAD_TOKEN_STATUS_CODES = new Set([404, 410]);
 
+const PRIVATE_HOSTNAME_PATTERNS = [
+  /^localhost$/i,
+  /^127\./,
+  /^10\./,
+  /^172\.(1[6-9]|2\d|3[0-1])\./,
+  /^192\.168\./,
+  /^169\.254\./,
+  /^0\.0\.0\.0$/,
+  /^\[?::1\]?$/,
+  /^f[cd][0-9a-f]{2}:/i,
+  /^fe80:/i,
+];
+
+function isDisallowedEndpoint(endpoint: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return true;
+  }
+  if (url.protocol !== 'https:') return true;
+  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+  return PRIVATE_HOSTNAME_PATTERNS.some((pattern) => pattern.test(hostname));
+}
+
 export async function sendWebPush(
   target: PushTarget & { type: 'webpush' },
   payload: PushPayload,
   config: WebPushConfig,
 ): Promise<SendResult> {
+  // target.subscription.endpoint is client-submitted and stored by the consumer app —
+  // reject anything that isn't an https push-service URL before handing it to web-push,
+  // so this provider can't be used as an SSRF proxy against internal/loopback hosts.
+  if (isDisallowedEndpoint(target.subscription.endpoint)) {
+    return {
+      target,
+      success: false,
+      error: { code: 'invalid-endpoint', message: 'Web Push endpoint is not an allowed https destination', isDeadToken: false },
+    };
+  }
+
   const webpush = (await import('web-push')).default;
   webpush.setVapidDetails(config.subject, config.vapidPublicKey, config.vapidPrivateKey);
 
@@ -538,13 +608,14 @@ export async function sendWebPush(
     return { target, success: true };
   } catch (err) {
     const statusCode = (err as { statusCode?: number }).statusCode ?? 0;
-    const message = (err as { body?: string }).body ?? 'Web Push send failed';
     return {
       target,
       success: false,
       error: {
         code: String(statusCode),
-        message,
+        // Don't propagate the raw upstream response body — it may echo back
+        // content from a host we didn't intend to contact.
+        message: 'Web Push send failed',
         isDeadToken: DEAD_TOKEN_STATUS_CODES.has(statusCode),
       },
     };
@@ -581,7 +652,7 @@ git commit -m "feat: add Web Push provider with dead-token detection"
 `src/server/__tests__/fcm.provider.spec.ts`:
 
 ```ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 const sendMock = vi.fn();
 const getMessagingMock = vi.fn(() => ({ send: sendMock }));
@@ -603,38 +674,45 @@ import type { PushTarget } from '../../index';
 const target: PushTarget = { type: 'fcm', userId: 'user-1', token: 'device-token-abc' };
 const config = { serviceAccount: { projectId: 'p' } };
 
-beforeEach(() => {
-  sendMock.mockReset();
-  initializeAppMock.mockClear();
-});
-
 describe('sendFcm', () => {
   it('returns success when send resolves', async () => {
+    sendMock.mockReset();
+    initializeAppMock.mockClear();
     sendMock.mockResolvedValue('message-id-123');
     const result = await sendFcm(target, { title: 't', body: 'b' }, config);
     expect(result.success).toBe(true);
   });
 
   it('flags dead token on registration-token-not-registered', async () => {
-    sendMock.mockRejectedValue({ code: 'messaging/registration-token-not-registered' });
+    sendMock.mockReset();
+    initializeAppMock.mockClear();
+    sendMock.mockRejectedValue(
+      Object.assign(new Error('not registered'), { code: 'messaging/registration-token-not-registered' }),
+    );
     const result = await sendFcm(target, { title: 't', body: 'b' }, config);
     expect(result.error?.isDeadToken).toBe(true);
     expect(result.error?.code).toBe('messaging/registration-token-not-registered');
   });
 
   it('flags dead token on InvalidRegistration', async () => {
-    sendMock.mockRejectedValue({ code: 'InvalidRegistration' });
+    sendMock.mockReset();
+    initializeAppMock.mockClear();
+    sendMock.mockRejectedValue(Object.assign(new Error('invalid'), { code: 'InvalidRegistration' }));
     const result = await sendFcm(target, { title: 't', body: 'b' }, config);
     expect(result.error?.isDeadToken).toBe(true);
   });
 
   it('returns non-fatal error for other codes', async () => {
-    sendMock.mockRejectedValue({ code: 'messaging/internal-error', message: 'boom' });
+    sendMock.mockReset();
+    initializeAppMock.mockClear();
+    sendMock.mockRejectedValue(Object.assign(new Error('boom'), { code: 'messaging/internal-error', message: 'boom' }));
     const result = await sendFcm(target, { title: 't', body: 'b' }, config);
     expect(result.error?.isDeadToken).toBe(false);
   });
 });
 ```
+
+**Note on rejection mocks and reset timing:** same two fixes as Task 3's provider test. (1) `.mockReset()`/`.mockClear()` are called as the first lines of each `it`, never in a `beforeEach` — on this project's `vitest@4.1.11`, resetting a mock inside `beforeEach` corrupts that mock's rejection handling for the test that follows, misreporting a caught, assertion-passing `mockRejectedValue` as a failure (verified by isolated repro, unrelated to vi.mock/dynamic-import/Error-vs-plain-object). (2) rejections use `Object.assign(new Error(...), {...})` because real `firebase-admin` messaging errors are `Error` instances, not plain objects.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -671,9 +749,8 @@ export async function sendFcm(
   payload: PushPayload,
   config: FcmConfig,
 ): Promise<SendResult> {
-  const messaging = await getMessaging(config);
-
   try {
+    const messaging = await getMessaging(config);
     await messaging.send({
       token: target.token,
       notification: { title: payload.title, body: payload.body },
@@ -824,26 +901,34 @@ export async function sendApns(
   payload: PushPayload,
   config: ApnsConfig,
 ): Promise<SendResult> {
-  const { apn, provider } = await getProvider(config);
+  try {
+    const { apn, provider } = await getProvider(config);
 
-  const notification = new apn.Notification();
-  notification.alert = { title: payload.title, body: payload.body };
-  notification.topic = config.bundleId;
-  notification.payload = payload.data ?? {};
+    const notification = new apn.Notification();
+    notification.alert = { title: payload.title, body: payload.body };
+    notification.topic = config.bundleId;
+    notification.payload = payload.data ?? {};
 
-  const response = await provider.send(notification, target.token);
-  const failure = response.failed[0];
+    const response = await provider.send(notification, target.token);
+    const failure = response.failed[0];
 
-  if (!failure) {
-    return { target, success: true };
+    if (!failure) {
+      return { target, success: true };
+    }
+
+    const reason = failure.response?.reason ?? 'Unknown';
+    return {
+      target,
+      success: false,
+      error: { code: reason, message: `APNs send failed: ${reason}`, isDeadToken: DEAD_TOKEN_REASONS.has(reason) },
+    };
+  } catch (err) {
+    return {
+      target,
+      success: false,
+      error: { code: 'apns-error', message: (err as Error).message ?? 'APNs send failed', isDeadToken: false },
+    };
   }
-
-  const reason = failure.response?.reason ?? 'Unknown';
-  return {
-    target,
-    success: false,
-    error: { code: reason, message: `APNs send failed: ${reason}`, isDeadToken: DEAD_TOKEN_REASONS.has(reason) },
-  };
 }
 ```
 
@@ -1097,12 +1182,22 @@ git commit -m "feat: add PushService with provider dispatch and auto-prune"
 
 ```ts
 import { describe, it, expect } from 'vitest';
+import { Global, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PushNotificationModule, PushNotificationModuleConfig } from '../push-notification.module';
 import { PushService } from '../push.service';
 import { SUBSCRIPTION_STORE } from '../../index';
 
 const dummyStore = { save: async () => {}, findByUserId: async () => [], delete: async () => {}, findAll: async () => [] };
+
+const EXTRA_CONFIG = Symbol('EXTRA_CONFIG');
+
+@Global()
+@Module({
+  providers: [{ provide: EXTRA_CONFIG, useValue: { serviceAccount: { projectId: 'injected' } } }],
+  exports: [EXTRA_CONFIG],
+})
+class ExtraConfigModule {}
 
 describe('PushNotificationModule', () => {
   it('forRoot registers PushService with given config', async () => {
@@ -1130,6 +1225,20 @@ describe('PushNotificationModule', () => {
     expect(moduleRef.get(PushService)).toBeInstanceOf(PushService);
   });
 
+  it('forRootAsync injects a real dependency into the factory', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        ExtraConfigModule,
+        PushNotificationModule.forRootAsync({
+          useFactory: (extra: { serviceAccount: object }) => ({ fcm: extra, subscriptionStore: dummyStore }),
+          inject: [EXTRA_CONFIG],
+        }),
+      ],
+    }).compile();
+
+    expect(moduleRef.get(PushService)).toBeInstanceOf(PushService);
+  });
+
   it('throws at bootstrap when webpush config is missing required fields', async () => {
     const badConfig = { webpush: { vapidPublicKey: 'a' } as never, subscriptionStore: dummyStore };
     await expect(
@@ -1149,7 +1258,7 @@ Expected: FAIL — module `../push-notification.module` not found.
 `src/server/push-notification.module.ts`:
 
 ```ts
-import { DynamicModule, Module, Provider } from '@nestjs/common';
+import { DynamicModule, InjectionToken, Module, OptionalFactoryDependency, Provider } from '@nestjs/common';
 import { PushService, PushServiceConfig } from './push.service';
 import { SUBSCRIPTION_STORE, SubscriptionStore } from '../index';
 
@@ -1203,8 +1312,8 @@ export class PushNotificationModule {
   }
 
   static forRootAsync(options: {
-    useFactory: (...args: never[]) => PushNotificationModuleConfig | Promise<PushNotificationModuleConfig>;
-    inject?: never[];
+    useFactory: (...args: any[]) => PushNotificationModuleConfig | Promise<PushNotificationModuleConfig>;
+    inject?: (InjectionToken | OptionalFactoryDependency)[];
   }): DynamicModule {
     return {
       module: PushNotificationModule,
