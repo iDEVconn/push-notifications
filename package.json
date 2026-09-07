@@ -70,6 +70,7 @@
     "firebase": { "optional": true }
   },
   "devDependencies": {
+    "@changesets/cli": "^3.0.1",
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
