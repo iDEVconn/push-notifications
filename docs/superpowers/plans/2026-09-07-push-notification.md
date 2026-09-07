@@ -301,6 +301,7 @@ node_modules
 dist
 *.log
 .DS_Store
+.worktrees/
 ```
 
 - [ ] **Step 8: Write placeholder `src/index.ts`**
