@@ -48,6 +48,10 @@ export class PushService {
     );
   }
 
+  async pruneTarget(userId: string, target: PushTarget): Promise<void> {
+    await this.store.delete(userId, target);
+  }
+
   private dispatch(target: PushTarget, payload: PushPayload): Promise<SendResult> {
     switch (target.type) {
       case 'webpush':
